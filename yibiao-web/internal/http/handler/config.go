@@ -206,30 +206,56 @@ func (c *Config) Save(e echo.Context) error {
 		}
 	}
 
-	// 生图模型：同理
-	hasImage := false
+	// 生图模型：前端 ClientConfig 用嵌套 image_model 对象；
+	// 旧接口用扁平 image_* 字段。两种都要认。
+	nestedImage, hasNestedImage := body["image_model"].(map[string]any)
+	hasImageFlat := false
 	for _, k := range []string{
-		"image_provider", "image_base_url", "image_model", "image_api_key",
+		"image_provider", "image_base_url", "image_api_key",
 	} {
 		if _, ok := body[k]; ok {
-			hasImage = true
+			hasImageFlat = true
 			break
 		}
 	}
-
-	if hasImage {
-		apiKey := pickString(body, "image_api_key")
+	// 注意：不能把顶层字符串 key "image_model" 当成扁平模型名——
+	// ClientConfig 里它是对象；误走扁平会把生图配置写成空串并覆盖。
+	if hasNestedImage || hasImageFlat {
+		apiKey := firstNonEmpty(
+			pickString(body, "image_api_key"),
+			pickString(nestedImage, "api_key"),
+		)
 		if apiKey == placeholderAPIKey {
 			apiKey = ""
 		}
 		req := settings.SaveImageRequest{
-			Provider: pickString(body, "image_provider"),
-			BaseURL:  pickString(body, "image_base_url"),
-			Model:    pickString(body, "image_model"),
+			Provider: firstNonEmpty(pickString(body, "image_provider"), pickString(nestedImage, "provider")),
+			BaseURL:  firstNonEmpty(pickString(body, "image_base_url"), pickString(nestedImage, "base_url")),
+			Model:    firstNonEmpty(pickString(nestedImage, "model_name"), pickString(nestedImage, "model")),
 			APIKey:   apiKey,
 		}
 		if err := c.svc.SaveImage(ctx, tenantID, req); err != nil {
 			return httpx.Internal(fmt.Errorf("保存生图模型配置失败: %w", err))
+		}
+	}
+
+	// 文件解析：components.file_parser
+	if components, ok := body["components"].(map[string]any); ok {
+		if parser, ok := components["file_parser"].(map[string]any); ok {
+			token := pickString(parser, "mineru_token", "token", "api_key")
+			if token == placeholderAPIKey {
+				token = ""
+			}
+			req := settings.SaveParserRequest{
+				TenderParser:  pickString(parser, "provider", "tender_parser"),
+				MineruBaseURL: pickString(parser, "mineru_base_url", "base_url"),
+				MineruAPIKey:   token,
+			}
+			if req.TenderParser != "" || req.MineruBaseURL != "" || req.MineruAPIKey != "" {
+				if err := c.svc.SaveParser(ctx, tenantID, req); err != nil {
+					return httpx.Internal(fmt.Errorf("保存文件解析配置失败: %w", err))
+				}
+			}
 		}
 	}
 
@@ -252,10 +278,20 @@ func (c *Config) SaveImage(e echo.Context) error {
 	}
 
 	req := settings.SaveImageRequest{
-		Provider: pickString(body, "image_provider") + pickString(nested, "provider"),
-		BaseURL:  pickString(body, "image_base_url") + pickString(nested, "base_url"),
-		Model:    pickString(body, "image_model") + pickString(nested, "model_name"),
-		APIKey:   pickString(body, "image_api_key") + pickString(nested, "api_key"),
+		Provider: firstNonEmpty(pickString(body, "image_provider"), pickString(nested, "provider")),
+		BaseURL:  firstNonEmpty(pickString(body, "image_base_url"), pickString(nested, "base_url")),
+		Model: firstNonEmpty(
+			pickString(nested, "model_name"),
+			pickString(nested, "model"),
+			// 仅当 image_model 不是对象时，才把扁平字符串当模型名
+			func() string {
+				if _, isMap := body["image_model"].(map[string]any); isMap {
+					return ""
+				}
+				return pickString(body, "image_model")
+			}(),
+		),
+		APIKey: firstNonEmpty(pickString(body, "image_api_key"), pickString(nested, "api_key")),
 	}
 
 	if req.APIKey == placeholderAPIKey {
@@ -289,33 +325,74 @@ func (c *Config) Status(e echo.Context) error {
 	})
 }
 
-// listModelsRequest 是列出模型的请求。
-type listModelsRequest struct {
-	BaseURL string `json:"base_url"`
-	APIKey  string `json:"api_key"`
-}
-
 // ListModels 列出可用模型。
+//
+// 设置页会把整个 ClientConfig 传来；文本获取用顶层 base_url/api_key，
+// 生图获取会覆盖顶层 base_url/api_key，但 reload 后 api_key 常是占位符。
 func (c *Config) ListModels(e echo.Context) error {
 	tenantID, _ := identity(e)
 
-	var req listModelsRequest
-	_ = e.Bind(&req)
+	body := make(map[string]any)
+	_ = e.Bind(&body)
 
-	baseURL := req.BaseURL
-	apiKey := req.APIKey
+	baseURL := strings.TrimSpace(pickString(body, "base_url"))
+	apiKey := strings.TrimSpace(pickString(body, "api_key"))
+	// 前端 reload 后 api_key 常是占位符 __CONFIGURED__，不能当真 Key 去上游。
+	if apiKey == placeholderAPIKey {
+		apiKey = ""
+	}
+
+	_, looksLikeImage := body["image_model"].(map[string]any)
+	// 生图「获取」会把 image 的 base_url/api_key 写到顶层，同时仍带 image_model 对象。
+	if looksLikeImage {
+		if nested, ok := body["image_model"].(map[string]any); ok {
+			if baseURL == "" {
+				baseURL = strings.TrimSpace(pickString(nested, "base_url"))
+			}
+			if apiKey == "" {
+				nestedKey := strings.TrimSpace(pickString(nested, "api_key"))
+				if nestedKey != "" && nestedKey != placeholderAPIKey {
+					apiKey = nestedKey
+				}
+			}
+		}
+	}
 
 	if baseURL == "" || apiKey == "" {
-		p, _, err := c.svc.Provider(e.Request().Context(), tenantID)
-		if err != nil {
-			return httpx.Fail(e, "MISSING_PROVIDER", err.Error())
+		ctx := e.Request().Context()
+		if looksLikeImage {
+			if apiKey == "" {
+				if stored := c.svc.ImageAPIKey(ctx, tenantID); stored != "" {
+					apiKey = stored
+				}
+			}
+			if baseURL == "" {
+				if view, err := c.svc.GetView(ctx, tenantID); err == nil {
+					baseURL = view.Image.BaseURL
+				}
+			}
 		}
-		if baseURL == "" {
-			baseURL = p.BaseURL
+		if baseURL == "" || apiKey == "" {
+			p, _, err := c.svc.Provider(ctx, tenantID)
+			if err != nil && apiKey == "" && baseURL == "" {
+				return httpx.Fail(e, "MISSING_PROVIDER", err.Error())
+			}
+			if err == nil {
+				if baseURL == "" {
+					baseURL = p.BaseURL
+				}
+				if apiKey == "" {
+					apiKey = p.APIKey
+				}
+			}
 		}
-		if apiKey == "" {
-			apiKey = p.APIKey
-		}
+	}
+
+	if baseURL == "" {
+		return httpx.Fail(e, "MISSING_PROVIDER", "未配置模型服务地址")
+	}
+	if apiKey == "" {
+		return httpx.Fail(e, "MISSING_API_KEY", "未配置 API Key，请在设置中填写")
 	}
 
 	models, err := settings.FetchModels(e.Request().Context(), baseURL, apiKey)
@@ -452,6 +529,9 @@ func buildImageProfiles(cur settings.ImageView) map[string]any {
 
 // pickString 按优先级从多个 key 里取第一个非空字符串。
 func pickString(m map[string]any, keys ...string) string {
+	if m == nil {
+		return ""
+	}
 	for _, k := range keys {
 		if v, ok := m[k].(string); ok && v != "" {
 			return v

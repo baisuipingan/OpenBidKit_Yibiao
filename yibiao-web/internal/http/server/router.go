@@ -243,7 +243,7 @@ func New(d Deps) *echo.Echo {
 	healthH := handler.NewHealth(d.Pool, d.Bus, storageBackend, d.Version)
 	rootH := handler.NewRoot(d.Version)
 	publicH := handler.NewPublic(d.Pool, demoIdentity != nil)
-	agentH := handler.NewAgent(agentSvc, usageRec)
+	agentH := handler.NewAgent(agentSvc, usageRec, settingsSvc)
 	bidH := handler.NewBidAnalysis(bidRunner, usageRec)
 	assetH := handler.NewAsset(artifactSvc)
 

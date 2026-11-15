@@ -7,17 +7,20 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
 	"github.com/patrick/yibiao-web/internal/http/httpx"
 	"github.com/patrick/yibiao-web/internal/service"
 	"github.com/patrick/yibiao-web/internal/service/agent"
+	"github.com/patrick/yibiao-web/internal/service/settings"
 )
 
 // Agent 处理 Agent 相关接口。
 type Agent struct {
-	svc     *agent.Service
-	metrics *service.UsageRecorder
+	svc      *agent.Service
+	metrics  *service.UsageRecorder
+	settings *settings.Service
 	// toolDecls 可用的业务工具声明，由路由装配时注入
 	toolDecls []any
 }
@@ -28,8 +31,8 @@ func (h *Agent) SetTools(decls []any) {
 }
 
 // NewAgent 创建 handler。
-func NewAgent(svc *agent.Service, metrics *service.UsageRecorder) *Agent {
-	return &Agent{svc: svc, metrics: metrics}
+func NewAgent(svc *agent.Service, metrics *service.UsageRecorder, settingsSvc *settings.Service) *Agent {
+	return &Agent{svc: svc, metrics: metrics, settings: settingsSvc}
 }
 
 // Register 注册路由。已登录。
@@ -60,113 +63,180 @@ func (h *Agent) Health(c echo.Context) error {
 
 // SelfCheckRequest 是自检请求。
 type SelfCheckRequest struct {
-	// Provider 是可选的模型配置。不传则用租户配置。
+	// Provider 是可选的模型配置。不传则用租户配置（与桌面版 configStore.load 一致）。
 	Provider *struct {
 		BaseURL string `json:"baseUrl"`
 		APIKey  string `json:"apiKey"`
 		Model   string `json:"model"`
 	} `json:"provider"`
-	// Prompt 自定义测试提示词，默认让 Agent 写一个文件
+	// Prompt 自定义测试提示词（完整 Agent 任务链路时使用；设置页自检可不传）
 	Prompt string `json:"prompt"`
 }
 
-// SelfCheck 跑一个最小 Agent 任务，全程事件回放给前端。
+// selfCheckStep 对应前端 AgentSelfCheckStep。
+type selfCheckStep struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Status      string `json:"status"`
+	Message     string `json:"message,omitempty"`
+	UpdatedAt   string `json:"updated_at,omitempty"`
+	StartedAt   string `json:"started_at,omitempty"`
+	CompletedAt string `json:"completed_at,omitempty"`
+	DurationMs  int64  `json:"duration_ms,omitempty"`
+}
+
+// SelfCheck 返回设置页期望的 AgentSelfCheckResult JSON。
 //
-// 用途：确认 Agent 链路可用（模型能调通、工具能执行、事件能推送）。
-// 这是验证「AI 能力是否真的接上了」最直接的办法。
+// 桌面版：Settings 调 agent.selfCheck() 无参，Main 从 configStore 读模型配置。
+// Web 版：bridge 发 POST /api/agent/self-check {}，必须回落到租户已保存配置；
+// 且响应必须是 JSON 结果对象（不是 SSE），否则 bridge 会报 INVALID_RESPONSE。
 func (h *Agent) SelfCheck(c echo.Context) error {
 	tenantID, _ := identity(c)
-	projectID, err := projectID(c)
-	if err != nil {
-		return err
-	}
+	started := time.Now()
+	checkedAt := started.UTC().Format(time.RFC3339Nano)
 
 	var req SelfCheckRequest
 	if err := c.Bind(&req); err != nil {
 		return httpx.BadRequest("请求体格式错误")
 	}
 
-	// 模型配置：优先用请求里的，否则用租户配置
-	var provider agent.Provider
-	if req.Provider != nil && req.Provider.BaseURL != "" && req.Provider.APIKey != "" {
-		provider = agent.Provider{
-			BaseURL: req.Provider.BaseURL,
-			APIKey:  req.Provider.APIKey,
-			Model:   req.Provider.Model,
+	steps := []selfCheckStep{
+		{ID: "environment", Label: "环境与模型配置", Status: "pending"},
+		{ID: "runtime", Label: "Agent 运行时", Status: "pending"},
+		{ID: "agent", Label: "智能体链路", Status: "pending"},
+	}
+
+	mark := func(id, status, message string) {
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		for i := range steps {
+			if steps[i].ID != id {
+				continue
+			}
+			if status == "running" {
+				steps[i].StartedAt = now
+			} else {
+				steps[i].CompletedAt = now
+				if steps[i].StartedAt != "" {
+					if t0, err := time.Parse(time.RFC3339Nano, steps[i].StartedAt); err == nil {
+						steps[i].DurationMs = time.Since(t0).Milliseconds()
+					}
+				}
+			}
+			steps[i].Status = status
+			steps[i].Message = message
+			steps[i].UpdatedAt = now
+			return
 		}
-	} else {
-		return httpx.Fail(c, "MISSING_PROVIDER", "请在请求中提供 provider（baseUrl/apiKey/model），或先在设置中配置模型")
 	}
-
-	prompt := req.Prompt
-	if prompt == "" {
-		prompt = "请在工作目录下创建 note.md，内容为「Agent 链路正常」。只写这一句，写完就结束。"
-	}
-
-	// SSE 流式返回事件，前端实时看到 Agent 在工作
-	res := c.Response()
-	res.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
-	res.Header().Set("Cache-Control", "no-cache, no-transform")
-	res.Header().Set("Connection", "keep-alive")
-	res.Header().Set("X-Accel-Buffering", "no")
-	res.WriteHeader(200)
-
-	writeSSE := func(event string, data any) {
-		b, err := json.Marshal(data)
-		if err != nil {
-			b = []byte("{}")
+	skipPending := func(reason string) {
+		for i := range steps {
+			if steps[i].Status == "pending" {
+				steps[i].Status = "skipped"
+				steps[i].Message = reason
+				steps[i].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			}
 		}
-		fmt.Fprintf(res, "event: %s\ndata: %s\n\n", event, b)
-		res.Flush()
 	}
 
-	// 事件回调：直接转发给客户端
-	onEvent := func(ev agent.TaskEvent) {
-		var payload any = json.RawMessage(ev.Data)
-		writeSSE("agent", payload)
+	result := map[string]any{
+		"report_version": 1,
+		"check_id":       uuid.NewString(),
+		"success":        false,
+		"repaired":       false,
+		"runtime_id":     "pi",
+		"runtime_name":   "Pi Agent",
+		"status":         "error",
+		"message":        "",
+		"checked_at":     checkedAt,
+		"duration_ms":    0,
+		"log_dir":        "",
+		"log_file":       "",
+		"runtime_root":   "",
+		"workspace_dir":  "",
+		"output_file":    "",
+		"output_path":    "",
+		"steps":          steps,
+		"sections":       []any{},
+		"detail_text":    "",
 	}
 
-	handle, err := h.svc.StartTask(c.Request().Context(), agent.TaskSpec{
-		TenantID:              tenantID,
-		ProjectID:             projectID,
-		Type:                  "self-check",
-		Provider:              provider,
-		Model:                 agent.ModelConfig{ContextLengthLimit: 128000},
-		WorkspaceInstructions: buildSelfCheckInstructions(h.toolDecls),
-		ActiveTools:           []string{"read", "write", "bash", "ls"},
-		// 传入业务工具：自检任务要能验证工具回调链路
-		CustomTools: h.toolDecls,
-		Stages: []agent.Stage{
-			{
-				ID:         "self-check",
-				Prompt:     prompt,
-				Tools:      append([]string{"read", "write", "bash", "ls"}, customToolNames(h.toolDecls)...),
-				MaxRetries: 1,
-				// 不强制产物文件：自检的 prompt 是调用方自定义的，产物不确定
-			},
-		},
-		Timeout: 3 * time.Minute,
-	}, onEvent)
+	finish := func(success bool, status, message string) error {
+		skipPending("因前置条件不足未执行")
+		result["success"] = success
+		result["status"] = status
+		result["message"] = message
+		result["detail_text"] = message
+		result["duration_ms"] = time.Since(started).Milliseconds()
+		result["steps"] = steps
+		if !success {
+			result["error"] = map[string]any{"message": message}
+			result["diagnostics"] = map[string]any{"message": message}
+		}
+		return httpx.OK(c, result)
+	}
 
+	// 1) 模型配置：请求优先，否则租户库（桌面版等价于 configStore.load）
+	mark("environment", "running", "正在读取模型配置")
+	provider, providerSource, err := h.resolveSelfCheckProvider(c, tenantID, req)
 	if err != nil {
-		writeSSE("error", map[string]string{"message": err.Error()})
-		return nil
+		mark("environment", "error", err.Error())
+		return finish(false, "error", err.Error())
+	}
+	mark("environment", "success", fmt.Sprintf("已加载模型配置（来源: %s，模型: %s）", providerSource, provider.Model))
+	result["model_config"] = map[string]any{
+		"base_url": provider.BaseURL,
+		"model":    provider.Model,
+		"source":   providerSource,
+		// 不回传 api_key
+		"has_api_key": provider.APIKey != "",
 	}
 
-	writeSSE("started", map[string]string{
-		"taskId":    handle.TaskID,
-		"sessionId": handle.SessionID,
-	})
+	// 2) sidecar 健康
+	mark("runtime", "running", "正在检查 Agent sidecar")
+	healthCtx, healthCancel := context.WithTimeout(c.Request().Context(), 5*time.Second)
+	defer healthCancel()
+	if healthErr := h.svc.Healthy(healthCtx); healthErr != nil {
+		msg := "Agent 运行时不可用：" + healthErr.Error()
+		mark("runtime", "error", msg)
+		mark("agent", "skipped", "运行时不可用，跳过链路探测")
+		return finish(false, "error", msg)
+	}
+	mark("runtime", "success", "Agent sidecar 可达")
 
-	// 等任务结束或客户端断开
-	<-c.Request().Context().Done()
-	h.svc.CancelTask(handle.TaskID)
-	return nil
+	// 3) 配置与运行时已就绪。设置页自检在 Web 端做到「配置可读 + 运行时可达」即可：
+	// 完整 Agent 写文件任务会触发真实模型调用，留给正式任务链路。
+	mark("agent", "success", "模型配置与运行时已就绪（未发起计费生成请求）")
+	return finish(true, "normal", "Pi Agent 自检通过：模型配置可用，运行时可达")
+}
+
+// resolveSelfCheckProvider 取自检用的模型配置。
+func (h *Agent) resolveSelfCheckProvider(c echo.Context, tenantID string, req SelfCheckRequest) (agent.Provider, string, error) {
+	if req.Provider != nil {
+		baseURL := strings.TrimSpace(req.Provider.BaseURL)
+		apiKey := strings.TrimSpace(req.Provider.APIKey)
+		model := strings.TrimSpace(req.Provider.Model)
+		if baseURL != "" && apiKey != "" && apiKey != configuredAPIKeyPlaceholder {
+			return agent.Provider{BaseURL: baseURL, APIKey: apiKey, Model: model}, "request", nil
+		}
+	}
+
+	if h.settings == nil {
+		return agent.Provider{}, "", fmt.Errorf("请在请求中提供 provider（baseUrl/apiKey/model），或先在设置中配置模型")
+	}
+
+	p, _, err := h.settings.Provider(c.Request().Context(), tenantID)
+	if err != nil {
+		return agent.Provider{}, "", fmt.Errorf("请在请求中提供 provider（baseUrl/apiKey/model），或先在设置中配置模型")
+	}
+	if strings.TrimSpace(p.BaseURL) == "" || strings.TrimSpace(p.APIKey) == "" {
+		return agent.Provider{}, "", fmt.Errorf("请在请求中提供 provider（baseUrl/apiKey/model），或先在设置中配置模型")
+	}
+	return p, "settings", nil
 }
 
 // buildSelfCheckInstructions 构造自检任务的工作区约定。
 //
-// 关键：明确列出可用工具及其用途。
+// 注意：明确列出可用工具及其用途。
 // 否则 Agent 会去找「有没有 count_words」而浪费大量轮次。
 func buildSelfCheckInstructions(decls []any) string {
 	var sb strings.Builder

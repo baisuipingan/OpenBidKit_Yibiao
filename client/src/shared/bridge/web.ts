@@ -578,6 +578,27 @@ const WEB_NOOP_HANDLERS: Record<string, (...args: any[]) => unknown> = {
   'config.freeLicenseDays': () => Promise.resolve(0),
   'config.expirePopupEnabled': () => Promise.resolve(false),
   'config.expirePopupDismissible': () => Promise.resolve(true),
+  /** 桌面版打开 userData 配置目录；Web 版无本地目录 */
+  'config.openConfigFolder': () => Promise.resolve({ success: true, message: 'Web 版无本地配置目录' }),
+
+  /** 智能体自检报告：桌面版写文件；Web 版触发浏览器下载 */
+  'agent.exportSelfCheckReport': (payload: unknown) => {
+    const report = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+    const text = typeof report.detail_text === 'string' && report.detail_text
+      ? report.detail_text
+      : JSON.stringify(report, null, 2);
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `pi-agent-self-check-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.txt`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+    return Promise.resolve({ success: true, message: '智能体自检报告已下载', path: link.download });
+  },
+
+  /** 开发者独立窗口：Web 版不提供 */
+  'developerTokenStats.openWindow': () => Promise.resolve({ success: false, message: 'Web 版不支持独立开发者窗口' }),
+  'developerAgentMonitor.openWindow': () => Promise.resolve({ success: false, message: 'Web 版不支持独立开发者窗口' }),
 
   /** 插件：Web 版不支持本地插件 */
   'plugins.getAvailablePlugins': () => Promise.resolve([]),
