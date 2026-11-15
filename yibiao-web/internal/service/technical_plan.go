@@ -68,22 +68,30 @@ type OutlineItem struct {
 	SortOrder  int32 `json:"sortOrder"`
 }
 
-// TenderFile 是招标文件条目。
+// TenderFile 同时覆盖前端的：
+//   - TechnicalPlanTenderSourceFile（tenderFiles[]）
+//   - TechnicalPlanTenderFile（tenderFile 单数）
+//   - TechnicalPlanOriginalPlanFile（originalPlanFile）
 //
-// 字段与前端 TechnicalPlanTenderSourceFile 严格对齐，
-// 缺字段会导致前端读 undefined 报错。
+// 单数对象比列表项多 selectedSection* / originalMarkdown*；
+// 多出来的 id 字段对前端无害。缺 tenderFile 会让「下一步」一直禁用。
 type TenderFile struct {
 	// ID 是稳定标识。Web 版没有本地路径，用文件名哈希做 ID。
-	ID       string `json:"id"`
+	ID       string `json:"id,omitempty"`
 	FileName string `json:"fileName"`
-	// MarkdownPath 前端在用，Web 版存资产引用
-	MarkdownPath   string `json:"markdownPath"`
-	MarkdownChars  int32  `json:"markdownChars"`
-	ContentHash    string `json:"contentHash"`
-	ParserLabel    string `json:"parserLabel,omitempty"`
-	SourceDocxPath string `json:"sourceDocxPath,omitempty"`
-	ImportedAt     string `json:"importedAt,omitempty"`
-	UpdatedAt      string `json:"updatedAt"`
+	// MarkdownPath 前端在用；Web 版常为空路径，用资产名占位（如 tender.md）
+	MarkdownPath          string `json:"markdownPath"`
+	MarkdownChars         int32  `json:"markdownChars"`
+	ContentHash           string `json:"contentHash"`
+	OriginalMarkdownPath  string `json:"originalMarkdownPath,omitempty"`
+	OriginalMarkdownChars int32  `json:"originalMarkdownChars,omitempty"`
+	OriginalContentHash   string `json:"originalContentHash,omitempty"`
+	ParserLabel           string `json:"parserLabel,omitempty"`
+	SourceDocxPath        string `json:"sourceDocxPath,omitempty"`
+	ImportedAt            string `json:"importedAt,omitempty"`
+	SelectedSectionID     string `json:"selectedSectionId,omitempty"`
+	SelectedSectionTitle  string `json:"selectedSectionTitle,omitempty"`
+	UpdatedAt             string `json:"updatedAt"`
 }
 
 // PlanState 是前端 `technicalPlan.loadState()` 期望的返回结构。
@@ -327,9 +335,15 @@ func toPlanState(
 		step = "document-analysis"
 	}
 
+	tenderFiles := parseTenderFiles(meta.TenderFiles, meta)
+
 	st := &PlanState{
 		Step:        step,
-		TenderFiles: parseTenderFiles(meta.TenderFiles, meta),
+		TenderFiles: tenderFiles,
+		// 单数 tenderFile / originalPlanFile：前端「下一步」和后续步骤门禁读它们。
+		// 不能只靠 tender_markdown_path——Web 导入把路径写成空串，改用资产引用。
+		TenderFile:       buildSingularTenderFile(meta, tenderFiles),
+		OriginalPlanFile: buildOriginalPlanFile(meta),
 		// 目录树：前端渲染目录/正文页必需
 		OutlineData: buildOutlineData(nodes),
 		// 以下字段给默认值，避免前端读 undefined
@@ -616,6 +630,112 @@ func buildOutlineData(nodes []store.TechnicalPlanOutlineNode) *OutlineData {
 	tree := walk(roots, 1, "")
 
 	return &OutlineData{Outline: tree}
+}
+
+// buildSingularTenderFile 构造前端 TechnicalPlanTenderFile。
+//
+// Web 导入把 TenderMarkdownPath 写成 ""（资产引用），所以不能像桌面版那样
+// 只看 path 是否非空；只要 tenderFiles 有条目，或 markdown chars/hash 已写入，
+// 就返回非 null，否则「下一步」会一直 disabled。
+func buildSingularTenderFile(meta store.TechnicalPlanMetum, files []TenderFile) *TenderFile {
+	if len(files) == 0 && meta.TenderMarkdownChars <= 0 && meta.TenderMarkdownHash == "" {
+		return nil
+	}
+
+	fileName := firstTenderFileName(meta.TenderFiles)
+	parserLabel := meta.TenderParserLabel
+	chars := meta.TenderMarkdownChars
+	id := ""
+	markdownPath := meta.TenderMarkdownPath
+
+	if len(files) > 0 {
+		id = files[0].ID
+		if fileName == "" {
+			fileName = files[0].FileName
+		}
+		if chars <= 0 {
+			chars = files[0].MarkdownChars
+		}
+		if parserLabel == "" {
+			parserLabel = files[0].ParserLabel
+		}
+		if markdownPath == "" {
+			markdownPath = files[0].MarkdownPath
+		}
+	}
+	if fileName == "" {
+		fileName = "技术方案招标文件"
+	}
+	if markdownPath == "" {
+		markdownPath = "tender.md"
+	}
+
+	importedAt := ""
+	if meta.TenderImportedAt.Valid {
+		importedAt = meta.TenderImportedAt.Time.UTC().Format(time.RFC3339)
+	}
+
+	origPath := meta.TenderOriginalMarkdownPath
+	if origPath == "" {
+		origPath = markdownPath
+	}
+	origChars := meta.TenderOriginalMarkdownChars
+	if origChars <= 0 {
+		origChars = chars
+	}
+	origHash := meta.TenderOriginalMarkdownHash
+	if origHash == "" {
+		origHash = meta.TenderMarkdownHash
+	}
+
+	return &TenderFile{
+		ID:                    id,
+		FileName:              fileName,
+		MarkdownPath:          markdownPath,
+		MarkdownChars:         chars,
+		ContentHash:           meta.TenderMarkdownHash,
+		OriginalMarkdownPath:  origPath,
+		OriginalMarkdownChars: origChars,
+		OriginalContentHash:   origHash,
+		ParserLabel:           parserLabel,
+		ImportedAt:            importedAt,
+		SelectedSectionID:     meta.SelectedSectionID,
+		SelectedSectionTitle:  meta.SelectedSectionTitle,
+		UpdatedAt:             meta.UpdatedAt.UTC().Format(time.RFC3339),
+	}
+}
+
+// buildOriginalPlanFile 构造前端 originalPlanFile。
+// 与 tenderFile 同类：Web 导入路径可为空，靠文件名/字数/hash 判断已导入。
+func buildOriginalPlanFile(meta store.TechnicalPlanMetum) *TenderFile {
+	if meta.OriginalPlanFileName == "" && meta.OriginalPlanMarkdownChars <= 0 && meta.OriginalPlanMarkdownHash == "" {
+		return nil
+	}
+
+	markdownPath := meta.OriginalPlanMarkdownPath
+	if markdownPath == "" {
+		markdownPath = "original-plan.md"
+	}
+
+	importedAt := ""
+	if meta.OriginalPlanImportedAt.Valid {
+		importedAt = meta.OriginalPlanImportedAt.Time.UTC().Format(time.RFC3339)
+	}
+
+	fileName := meta.OriginalPlanFileName
+	if fileName == "" {
+		fileName = "原方案"
+	}
+
+	return &TenderFile{
+		FileName:      fileName,
+		MarkdownPath:  markdownPath,
+		MarkdownChars: meta.OriginalPlanMarkdownChars,
+		ContentHash:   meta.OriginalPlanMarkdownHash,
+		ParserLabel:   meta.OriginalPlanParserLabel,
+		ImportedAt:    importedAt,
+		UpdatedAt:     meta.UpdatedAt.UTC().Format(time.RFC3339),
+	}
 }
 
 // parseTenderFiles 把数据库里的 JSON 转成前端要的数组。
