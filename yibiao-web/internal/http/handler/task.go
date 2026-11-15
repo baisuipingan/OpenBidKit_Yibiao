@@ -430,6 +430,35 @@ func (t *Task) MarkDone(taskID, status string) {
 	}
 }
 
+// Track 把外部启动的任务（如 Content.Generate）登记进 get-active 同一份 map。
+func (t *Task) Track(taskID, typ string) {
+	if taskID == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if existing, ok := t.tasks[taskID]; ok && existing != nil && !existing.Done {
+		return
+	}
+	t.tasks[taskID] = &taskRecord{
+		TaskID:    taskID,
+		Type:      typ,
+		Status:    "running",
+		StartedAt: time.Now(),
+	}
+}
+
+// HasRunning 判断内存中是否仍有未完成任务。
+func (t *Task) HasRunning(taskID string) bool {
+	if taskID == "" {
+		return false
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	rec := t.tasks[taskID]
+	return rec != nil && !rec.Done
+}
+
 // scopeOf 取当前租户与项目。
 func (t *Task) scopeOf(c echo.Context) (string, string, error) {
 	tenantID, _ := identity(c)
@@ -809,7 +838,7 @@ func (t *Task) StartContentGeneration(c echo.Context) error {
 	pendingSections := map[string]any{}
 	for _, sec := range sections {
 		pendingSections[sec.NodeID] = map[string]any{
-			"id": sec.NodeID, "title": sec.Title, "status": "running", "content": "",
+			"id": sec.NodeID, "title": sec.Title, "status": "pending", "content": "",
 		}
 	}
 	if persistErr := t.tpSvc.PersistContentGenerationStart(

@@ -39,10 +39,19 @@ type Content struct {
 	// taskRunLister 查任务记录（恢复时要拿旧工作区路径）
 	taskRunLister TaskRunLister
 
+	// activeTracker 把正文任务登记进 get-active 同一份内存表
+	activeTracker ActiveTaskTracker
+
 	// matcher 为章节匹配知识库素材
 	matcher *knowledge.Matcher
 	// useKnowledge 是否启用知识库（租户级开关）
 	useKnowledge bool
+}
+
+// ActiveTaskTracker 与 Task.get-active 共用的运行中任务登记。
+type ActiveTaskTracker interface {
+	Track(taskID, typ string)
+	MarkDone(taskID, status string)
 }
 
 // SetKnowledge 注入知识库匹配器。
@@ -87,6 +96,11 @@ func NewContent(
 // SetTaskRunLister 注入任务记录查询（用于恢复）。
 func (h *Content) SetTaskRunLister(l TaskRunLister) {
 	h.taskRunLister = l
+}
+
+// SetActiveTracker 注入 get-active 任务登记。
+func (h *Content) SetActiveTracker(t ActiveTaskTracker) {
+	h.activeTracker = t
 }
 
 // SetTools 注入工具声明。
@@ -288,10 +302,10 @@ func (h *Content) Generate(c echo.Context) error {
 		matchCancel()
 	}
 
-	// 配图编排
+	// 配图编排：配图 0% / disableImages / totalImages≤0 时不自动估算。
 	var imagePlanText string
 	var plan *imageplan.Plan
-	if !req.DisableImages {
+	if !req.DisableImages && req.TotalImages > 0 {
 		planSections := make([]imageplan.Section, 0, len(sections))
 		for _, sec := range sections {
 			planSections = append(planSections, imageplan.Section{
@@ -318,6 +332,39 @@ func (h *Content) Generate(c echo.Context) error {
 		}
 	}
 
+	onProgress := func(snap content.ProgressSnapshot) {
+		logLine := ""
+		if snap.TotalCount > 0 {
+			logLine = fmt.Sprintf("正文进度 %d/%d", snap.DoneCount, snap.TotalCount)
+		}
+		if persistErr := h.planSvc.PersistContentGenerationProgress(
+			context.Background(), tenantID, projectID, snap.TaskID, snap.Progress, logLine, snap.Sections,
+		); persistErr != nil && h.logger != nil {
+			h.logger.Warn("写入正文增量进度失败: " + persistErr.Error())
+		}
+		// 已完成小节提前落到节点表，load-state 与导出可见部分成果。
+		h.persistProgressedSections(tenantID, projectID, snap.Sections)
+		h.publishContentTask(tenantID, userID, projectID, map[string]any{
+			"task": map[string]any{
+				"task_id":  snap.TaskID,
+				"type":     "content-generation",
+				"status":   "running",
+				"progress": snap.Progress,
+				"logs":     []string{logLine},
+			},
+			"technicalPlanPatch": map[string]any{
+				"contentGenerationTask": map[string]any{
+					"task_id":  snap.TaskID,
+					"type":     "content-generation",
+					"status":   "running",
+					"progress": snap.Progress,
+					"logs":     []string{logLine},
+				},
+				"contentGenerationSections": snap.Sections,
+			},
+		})
+	}
+
 	result, err := h.runner.Start(c.Request().Context(), content.StartOptions{
 		TenantID:           tenantID,
 		ProjectID:          projectID,
@@ -331,6 +378,7 @@ func (h *Content) Generate(c echo.Context) error {
 		MinWords:           req.TotalWords,
 		ImagePlan:          imagePlanText,
 		OnEvent:            onEvent,
+		OnProgress:         onProgress,
 	})
 	if err != nil {
 		return httpx.Internal(err)
@@ -349,13 +397,17 @@ func (h *Content) Generate(c echo.Context) error {
 		StartedAt: time.Now(),
 	}
 	h.mu.Unlock()
+	if h.activeTracker != nil {
+		h.activeTracker.Track(owner, "content-generation")
+	}
 
+	// pending（不是 running+空 content），避免 UI 在整任务结束前永远把已完成数算成 0。
 	pendingSections := map[string]any{}
 	for _, sec := range sections {
 		pendingSections[sec.NodeID] = map[string]any{
-			"id":     sec.NodeID,
-			"title":  sec.Title,
-			"status": "running",
+			"id":      sec.NodeID,
+			"title":   sec.Title,
+			"status":  "pending",
 			"content": "",
 		}
 	}
@@ -409,6 +461,27 @@ func (h *Content) publishContentTask(tenantID, userID, projectID string, payload
 	}, payload)
 }
 
+// persistProgressedSections 把增量成功小节写进节点正文。
+func (h *Content) persistProgressedSections(tenantID, projectID string, sections map[string]any) {
+	if h.planSvc == nil || len(sections) == 0 {
+		return
+	}
+	for id, raw := range sections {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		status, _ := m["status"].(string)
+		body, _ := m["content"].(string)
+		if status != "success" || len([]rune(body)) <= 50 {
+			continue
+		}
+		if err := h.planSvc.UpdateSectionContentByProject(context.Background(), tenantID, projectID, id, body); err != nil && h.logger != nil {
+			h.logger.Warn("增量写入小节正文失败: " + err.Error())
+		}
+	}
+}
+
 // collectSections 从目录树提取待生成小节。
 //
 // 只取叶子节点（无子节点的），因为父节点是章节标题，不需要正文。
@@ -439,25 +512,24 @@ func (h *Content) collectSections(
 		wanted[id] = true
 	}
 
-	// 计算每节目标字数
-	targetPerSection := req.TargetWordsPerSection
-	if targetPerSection <= 0 && req.TotalWords > 0 {
-		// 按叶子数量平均分配
-		leafCount := 0
-		for _, n := range state.Outline {
-			if !hasChild[n.NodeID] {
-				leafCount++
-			}
-		}
-		if leafCount > 0 {
-			targetPerSection = req.TotalWords / leafCount
-			if targetPerSection < 300 {
-				targetPerSection = 300
-			}
+	// 计算每节目标字数：有全文总量时按叶子均分（不再抬到 300/800）。
+	targetPerSection := 0
+	leafCount := 0
+	for _, n := range state.Outline {
+		if !hasChild[n.NodeID] {
+			leafCount++
 		}
 	}
+	if req.TotalWords > 0 && leafCount > 0 {
+		targetPerSection = req.TotalWords / leafCount
+		if targetPerSection < 1 {
+			targetPerSection = 1
+		}
+	} else if req.TargetWordsPerSection > 0 {
+		targetPerSection = req.TargetWordsPerSection
+	}
 	if targetPerSection <= 0 {
-		targetPerSection = 800 // 默认每节 800 字
+		targetPerSection = 800 // 默认每节 800 字（无总量时）
 	}
 
 	// 构造路径（如「第一章 项目总述 > 1.1 项目背景」）
@@ -835,9 +907,9 @@ func (h *Content) Resume(c echo.Context) error {
 		})
 	}
 
-	// 5. 配图编排（只给待办小节）
+	// 5. 配图编排（只给待办小节；totalImages≤0 不自动估算）
 	var imagePlanText string
-	if !req.DisableImages {
+	if !req.DisableImages && req.TotalImages > 0 {
 		planSections := make([]imageplan.Section, 0, len(pending))
 		for _, sec := range pending {
 			planSections = append(planSections, imageplan.Section{

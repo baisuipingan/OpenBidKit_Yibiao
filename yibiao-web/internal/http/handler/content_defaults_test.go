@@ -23,11 +23,25 @@ func TestApplyContentPlanDefaultsUsesWordSnapshotAndFacts(t *testing.T) {
 	if req.TotalWords != 2000 {
 		t.Fatalf("TotalWords=%d", req.TotalWords)
 	}
-	if req.TargetWordsPerSection != 500 {
-		t.Fatalf("TargetWordsPerSection=%d", req.TargetWordsPerSection)
+	// 有总量时不把 sectionWords 写成每节目标，留给 collectSections 均分。
+	if req.TargetWordsPerSection != 0 {
+		t.Fatalf("TargetWordsPerSection=%d want 0", req.TargetWordsPerSection)
 	}
 	if !strings.Contains(facts, "项目角色") || !strings.Contains(facts, "项目经理") {
 		t.Fatalf("facts=%q", facts)
+	}
+}
+
+func TestApplyContentPlanDefaultsUsesSectionWordsWithoutTotal(t *testing.T) {
+	req := &generateRequest{}
+	state := &service.PlanState{
+		OutlineWordControlSnapshot: map[string]any{
+			"sectionWords": 500,
+		},
+	}
+	_ = applyContentPlanDefaults(req, state)
+	if req.TotalWords != 0 || req.TargetWordsPerSection != 500 {
+		t.Fatalf("%+v", req)
 	}
 }
 

@@ -291,6 +291,19 @@ func New(d Deps) *echo.Echo {
 		status := "success"
 		if !succeeded || err != nil || n == 0 {
 			status = "error"
+			msg := "正文生成失败"
+			if err != nil {
+				msg = "正文生成失败：" + err.Error()
+			} else if !succeeded {
+				msg = "正文生成失败：Agent 未成功完成"
+			} else if n == 0 {
+				msg = "正文生成失败：未得到有效章节"
+			}
+			if n == 0 {
+				if markErr := tpSvc.PersistContentGenerationFailed(ctx, tenantID, projectID, taskID, msg); markErr != nil {
+					d.Logger.Warn("写入正文失败状态失败", slog.String("error", markErr.Error()))
+				}
+			}
 		}
 		if contentH != nil {
 			contentH.MarkDone(taskID, status)
@@ -304,11 +317,7 @@ func New(d Deps) *echo.Echo {
 		}
 		taskPayload := state.ContentGenerationTask
 		if taskPayload == nil {
-			taskPayload = map[string]any{"task_id": taskID, "type": "content-generation", "status": status}
-		} else {
-			taskPayload["status"] = status
-			taskPayload["task_id"] = taskID
-			taskPayload["type"] = "content-generation"
+			taskPayload = map[string]any{"task_id": taskID, "type": "content-generation", "status": status, "progress": 100}
 		}
 		d.Bus.Publish("task", events.Scope{TenantID: tenantID, ProjectID: projectID}, map[string]any{
 			"task": taskPayload,
@@ -316,6 +325,7 @@ func New(d Deps) *echo.Echo {
 				"contentGenerationTask":     taskPayload,
 				"contentGenerationSections": state.ContentGenerationSections,
 				"contentGenerationRuntime":  state.ContentGenerationRuntime,
+				"outlineData":               state.OutlineData,
 			},
 		})
 	})
@@ -509,11 +519,15 @@ func New(d Deps) *echo.Echo {
 	// 正文生成（第三个标书垂类 Agent 功能）
 	contentH.SetTools(declsToAny(toolReg.Declarations()))
 	contentH.SetTaskRunLister(taskRunSvc)
+	contentH.SetActiveTracker(taskH)
 
 	// 知识库素材匹配：让正文生成能引用素材库里的真实内容
 	matcher := knowledge.NewMatcher(store.New(d.Pool), d.Logger)
 	contentH.SetKnowledge(matcher, d.Config.Knowledge.Enabled)
 	contentH.Register(api)
+
+	// 启动时调和僵尸正文任务：meta 仍 running 但内存/sidecar 已无。
+	go reconcileStaleContentTasks(context.Background(), tpSvc, taskRunSvc, taskH, artifactSvc, d.Logger)
 
 	// 一致性检查
 	consistencyH.Register(api)
@@ -658,6 +672,88 @@ func buildStorageBackend(ctx context.Context, cfg config.StoreConfig, log *slog.
 
 	default:
 		return nil, fmt.Errorf("未知的存储后端: %q（可选 local / s3）", cfg.Backend)
+	}
+}
+
+// reconcileStaleContentTasks 处理进程重启后的僵尸正文 running 态。
+//
+// 规则：
+//   - task_runs 已 success / 节点已有正文 → 回写 success（不重跑模型）
+//   - 否则标 interrupted，允许用户重新点「生成正文」
+func reconcileStaleContentTasks(
+	ctx context.Context,
+	tpSvc *service.TechnicalPlanService,
+	taskRuns *taskrun.Service,
+	taskH *handler.Task,
+	artifacts *artifact.Service,
+	log *slog.Logger,
+) {
+	if tpSvc == nil {
+		return
+	}
+	rows, err := tpSvc.ListProjectsWithRunningContentTask(ctx)
+	if err != nil {
+		if log != nil {
+			log.Warn("扫描僵尸正文任务失败", slog.String("error", err.Error()))
+		}
+		return
+	}
+	for _, row := range rows {
+		if row.TaskID == "" {
+			continue
+		}
+		if taskH != nil && taskH.HasRunning(row.TaskID) {
+			continue
+		}
+		runStatus := ""
+		if taskRuns != nil {
+			if view, getErr := taskRuns.Get(ctx, row.TaskID); getErr == nil && view != nil {
+				runStatus = view.Status
+			}
+		}
+		if runStatus == taskrun.StatusSuccess || runStatus == "completed" {
+			n, syncErr := tpSvc.SyncContentFromArtifacts(ctx, row.TenantID, row.ProjectID, row.TaskID, artifacts, log)
+			if syncErr != nil || n == 0 {
+				sections, written, buildErr := tpSvc.BuildContentSectionsFromNodes(ctx, row.TenantID, row.ProjectID)
+				if buildErr == nil && written > 0 {
+					_ = tpSvc.PersistContentGenerationSuccess(ctx, row.TenantID, row.ProjectID, row.TaskID, sections, written)
+					if log != nil {
+						log.Info("僵尸正文任务已按节点正文标为成功",
+							slog.String("task_id", row.TaskID),
+							slog.Int("written", written),
+						)
+					}
+					continue
+				}
+			} else if log != nil {
+				log.Info("僵尸正文任务已同步为成功",
+					slog.String("task_id", row.TaskID),
+					slog.Int("written", n),
+				)
+				continue
+			}
+		}
+		// 节点里其实已有正文时，优先标成功而不是 interrupted。
+		if sections, written, buildErr := tpSvc.BuildContentSectionsFromNodes(ctx, row.TenantID, row.ProjectID); buildErr == nil && written > 0 {
+			_ = tpSvc.PersistContentGenerationSuccess(ctx, row.TenantID, row.ProjectID, row.TaskID, sections, written)
+			if log != nil {
+				log.Info("僵尸正文任务已按节点正文标为成功",
+					slog.String("task_id", row.TaskID),
+					slog.Int("written", written),
+				)
+			}
+			continue
+		}
+		msg := "正文生成已中断（进程重启或任务丢失），可重新生成"
+		if markErr := tpSvc.PersistContentGenerationInterrupted(ctx, row.TenantID, row.ProjectID, row.TaskID, msg); markErr != nil {
+			if log != nil {
+				log.Warn("标记正文中断失败", slog.String("task_id", row.TaskID), slog.String("error", markErr.Error()))
+			}
+			continue
+		}
+		if log != nil {
+			log.Info("僵尸正文任务已标为 interrupted", slog.String("task_id", row.TaskID))
+		}
 	}
 }
 

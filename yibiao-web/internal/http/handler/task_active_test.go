@@ -76,3 +76,21 @@ func TestMarkDoneIdempotent(t *testing.T) {
 		t.Fatalf("%#v", h.tasks["t1"])
 	}
 }
+
+func TestTrackRegistersContentForGetActive(t *testing.T) {
+	h := &Task{tasks: make(map[string]*taskRecord)}
+	h.Track("c-track", "content-generation")
+	if !h.HasRunning("c-track") {
+		t.Fatal("expected running after Track")
+	}
+	if got := h.findRunning("content-generation"); got != "c-track" {
+		t.Fatalf("findRunning=%q", got)
+	}
+	h.MarkDone("c-track", "error")
+	if h.HasRunning("c-track") {
+		t.Fatal("still running after MarkDone")
+	}
+	if got := h.findRunning("content-generation"); got != "" {
+		t.Fatalf("findRunning after done=%q", got)
+	}
+}

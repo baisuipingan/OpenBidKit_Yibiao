@@ -97,9 +97,11 @@ function findItem(items: OutlineItem[], id: string): OutlineItem | null {
 
 function getLeafContent(item: OutlineItem, sections: ContentGenerationSections) {
   const section = sections[item.id];
-  return section && Object.prototype.hasOwnProperty.call(section, 'content')
-    ? section.content || ''
-    : item.content || '';
+  const fromSection = section && Object.prototype.hasOwnProperty.call(section, 'content')
+    ? String(section.content || '')
+    : '';
+  // sections 里空 content 不能盖住已写入 outline 节点的正文（僵尸 running 映射时常见）。
+  return fromSection.trim() ? fromSection : (item.content || '');
 }
 
 // 非 AI 小节没有正文，状态由商务模版章节决定（见 buildOutlineMeta）；目录在导出时自动生成，不算待处理。
@@ -107,11 +109,14 @@ function getLeafStatus(item: OutlineItem, sections: ContentGenerationSections): 
   if (item.content_mode === 'directory-generate') return 'success';
   if (item.content_mode !== 'ai-generate') return 'pending';
   const section = sections[item.id];
+  const hasBody = Boolean(getLeafContent(item, sections).trim());
+  if (section?.status === 'success' || section?.status === 'error') {
+    return section.status;
+  }
+  if (hasBody) return 'success';
   if (section?.status) {
     return section.status;
   }
-
-  if (getLeafContent(item, sections).trim()) return 'success';
   return 'idle';
 }
 
@@ -279,15 +284,26 @@ function ContentEditPage({
   const running = task?.status === 'running';
   const pausing = task?.status === 'pausing' || pausePending;
   const paused = task?.status === 'paused';
-  const taskFailed = task?.status === 'error';
+  const taskFailed = task?.status === 'error' || task?.status === 'interrupted';
   const taskInFlight = running || pausing;
   const phaseVisible = taskInFlight || paused || taskFailed;
+  const lastTaskErrorRef = useRef<string>('');
   useEffect(() => {
     if (!taskInFlight) return;
     setProgressNow(Date.now());
     const timer = window.setInterval(() => setProgressNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [taskInFlight]);
+  useEffect(() => {
+    if (task?.status !== 'error' && task?.status !== 'interrupted') {
+      if (task?.status === 'running' || task?.status === 'success') lastTaskErrorRef.current = '';
+      return;
+    }
+    const message = String(task.error || (task.status === 'interrupted' ? '正文生成已中断' : '正文生成失败')).trim();
+    if (!message || message === lastTaskErrorRef.current) return;
+    lastTaskErrorRef.current = message;
+    showToast(message, 'error');
+  }, [task?.status, task?.error, showToast]);
   const taskBlocksGeneration = taskInFlight || paused || sectionSubmitting || generationSubmitting;
   const contentStats = task?.stats?.content;
   const previewReadySectionIds = useMemo(() => new Set(contentStats?.preview_ready_section_ids || []), [contentStats?.preview_ready_section_ids]);
@@ -828,9 +844,12 @@ function ContentEditPage({
             : 'start';
       await launchContentGeneration({ savedGenerationOptions, config, regenerate, contentGenerationAction });
     } catch (error) {
-      const message = (error && typeof error === 'object' && 'message' in error && String((error as Error).message || '').trim())
-        || (error && typeof error === 'object' && 'code' in error && String((error as { code?: string }).code || '').trim())
-        || '启动正文生成任务失败';
+      let message = '启动正文生成任务失败';
+      if (error instanceof Error && error.message.trim()) message = error.message.trim();
+      else if (error && typeof error === 'object' && 'code' in error) {
+        const code = String((error as { code?: unknown }).code || '').trim();
+        if (code) message = code;
+      }
       showToast(message, 'error');
     } finally {
       generationStarting.current = false;

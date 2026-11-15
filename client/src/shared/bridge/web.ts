@@ -1028,8 +1028,10 @@ const NS_LOCAL: Record<string, (...args: any[]) => unknown> = {
     const options = (p.generationOptions || {}) as Record<string, any>;
     const word = (p.outlineWordControlSnapshot || p.wordControl || options.outlineWordControlSnapshot || {}) as Record<string, any>;
 
-    // 配图开关：三个都关 = 不配图
-    const useImages = Boolean(options.useAiImages || options.useMermaidImages || options.useHtmlImages);
+    // 配图：配图 0% / 无 时必须 disableImages，不能仅靠 type 开关（默认 mermaid/html 常为 true）。
+    const imageQuantity = Number(options.imageQuantity ?? 0);
+    const typeEnabled = Boolean(options.useAiImages || options.useMermaidImages || options.useHtmlImages);
+    const useImages = imageQuantity > 0 && typeEnabled;
 
     const body: Record<string, unknown> = {
       force: Boolean(p.regenerate),
@@ -1038,15 +1040,19 @@ const NS_LOCAL: Record<string, (...args: any[]) => unknown> = {
       disableKnowledge: options.useKnowledge === false,
     };
 
-    // 字数：优先请求显式字段，否则带上快照（服务端也会从 load-state 补齐）
+    // 字数：有全文总量时只传 totalWords，让服务端按叶子均分；不要再带 sectionWords 当每节目标。
     const totalWords = Number(p.totalWords ?? word.minimumWords ?? word.maximumWords ?? 0);
     const sectionWords = Number(p.targetWordsPerSection ?? word.sectionWords ?? 0);
-    if (totalWords > 0) body.totalWords = totalWords;
-    if (sectionWords > 0) body.targetWordsPerSection = sectionWords;
+    if (totalWords > 0) {
+      body.totalWords = totalWords;
+    } else if (sectionWords > 0) {
+      body.targetWordsPerSection = sectionWords;
+    }
 
-    // 图片数量：桌面版是数字，Web 后端也是
-    if (typeof options.imageQuantity === 'number') {
-      body.totalImages = options.imageQuantity;
+    if (useImages) {
+      body.totalImages = imageQuantity;
+    } else {
+      body.totalImages = 0;
     }
 
     // 图片类型

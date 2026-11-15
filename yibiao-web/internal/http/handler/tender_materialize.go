@@ -23,6 +23,10 @@ type TenderSource interface {
 //
 // 优先用 explicit 本地路径；否则从资产库取 tender.md。
 // 调用方负责执行返回的 cleanup。
+//
+// 时序约定：Agent StartTask.prepareInputs 会在返回前同步把 tender.md
+// 拷进工作区；因此 Generate 里 `defer cleanup()` 只在 Start 成功返回后
+// 才会删临时文件，不会让后续 Agent 回合依赖已删除的源路径。
 func MaterializeTenderMarkdown(
 	ctx context.Context,
 	source TenderSource,

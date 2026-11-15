@@ -22,7 +22,8 @@ func applyContentPlanDefaults(req *generateRequest, state *service.PlanState) st
 			mapInt(state.OutlineWordControlOptions, "maximumWords"),
 		)
 	}
-	if req.TargetWordsPerSection <= 0 {
+	// 有全文总量时由 collectSections 按叶子均分，不要用 sectionWords 覆盖成「每节 500×叶子数」。
+	if req.TotalWords <= 0 && req.TargetWordsPerSection <= 0 {
 		req.TargetWordsPerSection = firstPositiveInt(
 			mapInt(state.OutlineWordControlSnapshot, "sectionWords"),
 			mapInt(state.OutlineWordControlOptions, "sectionWords"),

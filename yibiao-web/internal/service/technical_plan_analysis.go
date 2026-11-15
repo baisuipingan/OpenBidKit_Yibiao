@@ -495,6 +495,21 @@ func (s *TechnicalPlanService) SyncContentFromArtifacts(
 		slog.Int("written", written),
 	)
 
+	// 同步更新 contentGenerationTask / sections，否则 load-state 会一直卡在 running + 空正文。
+	sections, n, buildErr := s.BuildContentSectionsFromNodes(ctx, tenantID, projectID)
+	if buildErr != nil && log != nil {
+		log.Warn("构造正文小节状态失败", slog.String("error", buildErr.Error()))
+	}
+	if written > 0 {
+		if persistErr := s.PersistContentGenerationSuccess(ctx, tenantID, projectID, taskID, sections, written); persistErr != nil && log != nil {
+			log.Warn("写入正文成功状态失败", slog.String("error", persistErr.Error()))
+		}
+	} else if n == 0 {
+		if persistErr := s.PersistContentGenerationFailed(ctx, tenantID, projectID, taskID, "正文生成失败：未得到有效章节"); persistErr != nil && log != nil {
+			log.Warn("写入正文失败状态失败", slog.String("error", persistErr.Error()))
+		}
+	}
+
 	return written, nil
 }
 
@@ -560,6 +575,18 @@ func stripLeadingNumber(s string) string {
 }
 
 // UpdateSectionContent 更新某节点正文（内部用，支持字符串 ID）。
+// UpdateSectionContentByProject 用字符串租户/项目 ID 写入单节正文（增量进度用）。
+func (s *TechnicalPlanService) UpdateSectionContentByProject(
+	ctx context.Context,
+	tenantID, projectID, nodeID, content string,
+) error {
+	tid, pid, err := s.resolve(tenantID, projectID)
+	if err != nil {
+		return err
+	}
+	return s.UpdateSectionContent(ctx, tid, pid, nodeID, content)
+}
+
 func (s *TechnicalPlanService) UpdateSectionContent(ctx context.Context, tid, pid uuid.UUID, nodeID, content string) error {
 	if parsed, err := uuid.Parse(nodeID); err == nil {
 		return s.q.UpdateOutlineNodeContent(ctx, store.UpdateOutlineNodeContentParams{
