@@ -1071,6 +1071,61 @@ const NS_LOCAL: Record<string, (...args: any[]) => unknown> = {
     const base = (import.meta as any).env?.VITE_API_BASE || '';
     return `${base}/api/assets/${encodeURIComponent(assetId)}/download?access_token=${encodeURIComponent(token)}`;
   },
+
+  /**
+   * Word 导出：走文档约定的 /export/word（同时后端也挂了 /export/export-word 别名）。
+   * 返回桌面版 WordExportResult，并触发浏览器下载 .docx。
+   */
+  'export.exportWord': async (payload: unknown) => {
+    const data = await request<Record<string, any>>('/export/word', payload || {});
+    const assetId = String(data.assetId || '');
+    const fileName = String(data.fileName || '技术方案.docx');
+    const token = getAccessToken();
+    const base = (import.meta as any).env?.VITE_API_BASE || '';
+    let downloadUrl = String(data.downloadUrl || data.path || '');
+    if (assetId) {
+      downloadUrl = `${base}/api/assets/${encodeURIComponent(assetId)}/download?access_token=${encodeURIComponent(token)}`;
+    } else if (downloadUrl && !/^https?:\/\//i.test(downloadUrl)) {
+      const sep = downloadUrl.includes('?') ? '&' : '?';
+      downloadUrl = `${base}${downloadUrl.startsWith('/') ? '' : '/'}${downloadUrl}${sep}access_token=${encodeURIComponent(token)}`;
+    }
+
+    if (downloadUrl && typeof document !== 'undefined') {
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = fileName;
+      link.rel = 'noopener';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    }
+
+    const warnings = Array.isArray(data.warnings)
+      ? data.warnings.map(String)
+      : (data.warning ? [String(data.warning)] : undefined);
+
+    return {
+      success: data.success !== false,
+      path: downloadUrl,
+      message: String(data.message || 'Word 已导出'),
+      warnings,
+      assetId: assetId || undefined,
+      fileName,
+      downloadUrl,
+    };
+  },
+
+  /** Web：打开/再次下载导出文件（path 通常是带 token 的下载 URL）。 */
+  'export.openFile': async (filePath: unknown) => {
+    const url = typeof filePath === 'string' ? filePath.trim() : '';
+    if (!url) {
+      throw new BridgeError('INVALID_ARGUMENT', '缺少文件路径');
+    }
+    if (typeof window !== 'undefined') {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+    return { success: true };
+  },
 };
 
 function buildNamespace(ns: string): any {

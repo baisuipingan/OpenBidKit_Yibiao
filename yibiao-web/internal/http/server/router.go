@@ -441,10 +441,8 @@ func New(d Deps) *echo.Echo {
 	taskRunH := handler.NewTaskRun(taskRunSvc)
 	taskRunH.SetPlanService(tpSvc)
 
-	var exportH *handler.Export
-	if exportSvc != nil {
-		exportH = handler.NewExport(exportSvc, tpSvc)
-	}
+	// 始终注册导出路由：无 OpenXmlHelper 时仍返回 EXPORT_FAILED，避免前端落到 HTTP 404 Not Found。
+	exportH := handler.NewExport(exportSvc, tpSvc)
 	configH := handler.NewConfig(settingsSvc)
 
 	// 工具回调：按 sessionId 反查上下文
@@ -541,10 +539,8 @@ func New(d Deps) *echo.Echo {
 	// 桌面版专属接口的兼容实现（不能让前端拿 404）
 	compatH.Register(api)
 
-	// Word 导出
-	if exportH != nil {
-		exportH.Register(api)
-	}
+	// Word 导出（始终注册；无助手时 handler 返回 EXPORT_FAILED）
+	exportH.Register(api)
 
 	// 资产（个人资产库）
 	assetH.Register(api)
