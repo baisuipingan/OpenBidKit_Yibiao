@@ -148,6 +148,50 @@ func (s *TechnicalPlanService) LoadOutlineRuntime(ctx context.Context, tenantID,
 	return out, nil
 }
 
+// PersistOutlineWordControlSnapshot 把当前生成配置的字数选项写入 meta 快照列。
+//
+// 桌面版在目录生成完成时固化这份配置；前端用它判断「下一步」是否可点，
+// 以及字数设置是否相对目录已过期。
+func (s *TechnicalPlanService) PersistOutlineWordControlSnapshot(
+	ctx context.Context,
+	tenantID, projectID string,
+) (map[string]any, error) {
+	tid, pid, err := s.resolve(tenantID, projectID)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.q.EnsureGenerationConfig(ctx, store.EnsureGenerationConfigParams{
+		ProjectID: pid, TenantID: tid,
+	}); err != nil {
+		return nil, fmt.Errorf("初始化生成配置失败: %w", err)
+	}
+	cfg, err := s.q.GetGenerationConfig(ctx, store.GetGenerationConfigParams{
+		ProjectID: pid, TenantID: tid,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("读取生成配置失败: %w", err)
+	}
+	snapshot := map[string]any{
+		"minimumWords": cfg.MinimumWords,
+		"maximumWords": cfg.MaximumWords,
+		"sectionWords": cfg.SectionWords,
+	}
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		return nil, err
+	}
+	_, err = s.pool.Exec(ctx, `
+UPDATE technical_plan_meta
+   SET outline_word_control_snapshot = $3::jsonb, updated_at = now()
+ WHERE project_id = $1 AND tenant_id = $2`,
+		pid, tid, raw,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("保存字数控制快照失败: %w", err)
+	}
+	return snapshot, nil
+}
+
 // PersistContentGenerationStart 写入正文生成 running 态。
 func (s *TechnicalPlanService) PersistContentGenerationStart(
 	ctx context.Context,

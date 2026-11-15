@@ -138,6 +138,7 @@ type PlanState struct {
 	OutlineMode                string         `json:"outlineMode"`
 	OutlineExpansionMode       string         `json:"outlineExpansionMode"`
 	OutlineWordControlOptions  map[string]any `json:"outlineWordControlOptions"`
+	OutlineWordControlSnapshot map[string]any `json:"outlineWordControlSnapshot"`
 	OutlineGenerationTask      map[string]any `json:"outlineGenerationTask"`
 	ReferenceKnowledgeIDs      []string       `json:"referenceKnowledgeDocumentIds"`
 	GlobalFactsMode            string         `json:"globalFactsMode"`
@@ -390,6 +391,8 @@ func toPlanState(
 			"maximumWords": cfg.MaximumWords,
 			"sectionWords": cfg.SectionWords,
 		},
+		// 目录生效时的字数快照：下一步门禁读它；缺则「请重新生成目录」
+		OutlineWordControlSnapshot: parseWordControlSnapshot(meta.OutlineWordControlSnapshot),
 		ContentGenerationOptions: map[string]any{
 			"useAiImages":           cfg.UseAiImages,
 			"useMermaidImages":      cfg.UseMermaidImages,
@@ -837,6 +840,28 @@ func parseTenderFiles(raw []byte, meta store.TechnicalPlanMetum) []TenderFile {
 func shortHash(s string) string {
 	h := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(h[:4])
+}
+
+// parseWordControlSnapshot 把 meta 列 JSONB 还原成前端 outlineWordControlSnapshot。
+func parseWordControlSnapshot(raw []byte) map[string]any {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil || out == nil {
+		return nil
+	}
+	// 统一成 int 友好的数值（JSONB 数字是 float64）
+	normalized := map[string]any{}
+	for _, key := range []string{"minimumWords", "maximumWords", "sectionWords"} {
+		if n, ok := asInt32(out[key]); ok {
+			normalized[key] = n
+		}
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
 }
 
 func firstTenderFileName(raw []byte) string {

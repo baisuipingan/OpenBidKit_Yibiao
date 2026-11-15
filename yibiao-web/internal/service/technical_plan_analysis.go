@@ -314,6 +314,9 @@ func (s *TechnicalPlanService) SyncOutlineFromArtifacts(
 	if err := s.PersistOutlineGenerationSuccess(ctx, tenantID, projectID, taskID, total); err != nil {
 		log.Warn("写入目录成功状态失败", slog.String("error", err.Error()))
 	}
+	if _, snapErr := s.PersistOutlineWordControlSnapshot(ctx, tenantID, projectID); snapErr != nil {
+		log.Warn("写入字数控制快照失败", slog.String("error", snapErr.Error()))
+	}
 	log.Info("目录已写进节点表",
 		slog.String("task_id", taskID),
 		slog.Int("nodes", total),
