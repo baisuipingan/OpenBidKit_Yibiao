@@ -349,7 +349,7 @@ func (t *Task) Events(c echo.Context) error {
 					Status string `json:"status"`
 				}
 				if json.Unmarshal(ev, &head) == nil && head.Type == "task_end" {
-					t.markDone(req.TaskID, head.Status)
+					t.MarkDone(req.TaskID, head.Status)
 				}
 			}
 
@@ -365,8 +365,12 @@ func (t *Task) Events(c echo.Context) error {
 	}
 }
 
-// markDone 标记任务完成。
-func (t *Task) markDone(taskID, status string) {
+// MarkDone 标记内存任务完成。
+//
+// 必须在 runner 完成回调里调用，不能只依赖 /tasks/events SSE：
+// 没有订阅者或未收到 task_end 时，findRunning 会一直把已结束任务当成 running，
+// 导致下一次 start-* 误报 TASK_RUNNING。
+func (t *Task) MarkDone(taskID, status string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	rec := t.tasks[taskID]
