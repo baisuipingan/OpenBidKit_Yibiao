@@ -2,6 +2,7 @@ package handler
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 
@@ -42,6 +43,7 @@ func (c *Config) Register(g *echo.Group) {
 	g.POST("/config/save-image", c.SaveImage)
 	g.POST("/config/status", c.Status)
 	g.POST("/config/list-models", c.ListModels)
+	g.POST("/config/get-model-info", c.GetModelInfo)
 }
 
 // Load 读取配置（不含明文 Key）。
@@ -325,6 +327,36 @@ func (c *Config) ListModels(e echo.Context) error {
 		"success": true,
 		"models":  models,
 	})
+}
+
+// getModelInfoRequest 对应前端 window.yibiao.config.getModelInfo(modelName)。
+// Web bridge 未声明位置参数名时，会把单参数包成 { "value": modelName }。
+type getModelInfoRequest struct {
+	Value     string `json:"value"`
+	ModelName string `json:"modelName"`
+	ModelID   string `json:"model_name"`
+}
+
+// GetModelInfo 按模型名从官方缓存填充高级参数。
+//
+// 与桌面版相同：不访问用户配置的 Base URL / API Key。
+func (c *Config) GetModelInfo(e echo.Context) error {
+	var req getModelInfoRequest
+	_ = e.Bind(&req)
+
+	modelName := strings.TrimSpace(req.ModelName)
+	if modelName == "" {
+		modelName = strings.TrimSpace(req.ModelID)
+	}
+	if modelName == "" {
+		modelName = strings.TrimSpace(req.Value)
+	}
+
+	result, err := settings.FetchModelInfo(e.Request().Context(), modelName)
+	if err != nil {
+		return httpx.Fail(e, "GET_MODEL_INFO_FAILED", err.Error())
+	}
+	return httpx.OK(e, result)
 }
 
 // apiKeyPlaceholder 返回 API Key 的占位表示。
