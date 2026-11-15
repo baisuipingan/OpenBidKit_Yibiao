@@ -24,6 +24,7 @@ import (
 	"github.com/patrick/yibiao-web/internal/service/agent/bidanalysis"
 	"github.com/patrick/yibiao-web/internal/service/agent/consistency"
 	"github.com/patrick/yibiao-web/internal/service/agent/content"
+	"github.com/patrick/yibiao-web/internal/service/agent/globalfacts"
 	"github.com/patrick/yibiao-web/internal/service/agent/outline"
 	"github.com/patrick/yibiao-web/internal/service/agenttool"
 	agenttoolbuiltin "github.com/patrick/yibiao-web/internal/service/agenttool/tools"
@@ -314,6 +315,45 @@ func New(d Deps) *echo.Echo {
 			},
 		})
 	})
+	globalFactsRunner := globalfacts.NewRunner(agentSvc, artifactSvc, d.Logger)
+	globalFactsRunner.SetOnDone(func(ctx context.Context, tenantID, projectID, taskID string, succeeded bool) {
+		n, err := tpSvc.SyncGlobalFactsFromArtifacts(ctx, tenantID, projectID, taskID, artifactSvc, d.Logger)
+		if err != nil {
+			d.Logger.Warn("全局事实回写失败", slog.String("task_id", taskID), slog.String("error", err.Error()))
+		}
+		status := "success"
+		if !succeeded || err != nil || n == 0 {
+			status = "error"
+			msg := "全局事实生成失败：未得到有效结果"
+			if err != nil {
+				msg = "全局事实生成失败：" + err.Error()
+			}
+			if markErr := tpSvc.MarkGlobalFactsFailed(ctx, tenantID, projectID, taskID, msg); markErr != nil {
+				d.Logger.Warn("写入全局事实失败状态失败", slog.String("error", markErr.Error()))
+			}
+		}
+		if taskH != nil {
+			taskH.MarkDone(taskID, status)
+		}
+		state, loadErr := tpSvc.LoadState(ctx, tenantID, projectID)
+		if loadErr != nil {
+			d.Logger.Warn("全局事实完成后读状态失败", slog.String("error", loadErr.Error()))
+			return
+		}
+		taskPayload := state.GlobalFactsTask
+		if taskPayload == nil {
+			taskPayload = map[string]any{
+				"task_id": taskID, "type": globalfacts.TaskType, "status": status, "progress": 100,
+			}
+		}
+		d.Bus.Publish("task", events.Scope{TenantID: tenantID, ProjectID: projectID}, map[string]any{
+			"task": taskPayload,
+			"technicalPlanPatch": map[string]any{
+				"globalFactsTask": taskPayload,
+				"globalFacts":     state.GlobalFacts,
+			},
+		})
+	})
 	consistencyRunner := consistency.NewRunner(agentSvc, d.Logger)
 
 	// --- 装配 handler ---
@@ -378,7 +418,7 @@ func New(d Deps) *echo.Echo {
 	// AI 连通性测试（设置页「测试」按钮）
 	aiH := handler.NewAI(settingsSvc)
 	outlineH := handler.NewOutline(outlineRunner, tpSvc)
-	taskH = handler.NewTask(tpSvc, outlineRunner, bidRunner, contentRunner, settingsSvc, artifactSvc, d.Bus)
+	taskH = handler.NewTask(tpSvc, outlineRunner, bidRunner, contentRunner, globalFactsRunner, settingsSvc, artifactSvc, d.Bus)
 	contentH := handler.NewContent(contentRunner, tpSvc, settingsSvc)
 
 	consistencyH := handler.NewConsistency(consistencyRunner, tpSvc, settingsSvc)

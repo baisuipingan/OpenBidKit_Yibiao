@@ -104,3 +104,29 @@ func TestToPlanStateTenderFileNilWhenNothingImported(t *testing.T) {
 		t.Fatalf("expected nil originalPlanFile, got %+v", st.OriginalPlanFile)
 	}
 }
+
+func TestToPlanStateMapsGlobalFactsAndTask(t *testing.T) {
+	extra, _ := json.Marshal(map[string]any{
+		"globalFacts": []any{
+			map[string]any{"id": "team", "title": "项目角色", "content": "- 项目经理：按要求配备。"},
+		},
+		"globalFactsTask": map[string]any{
+			"task_id":  "gf-1",
+			"type":     "global-facts-generation",
+			"status":   "success",
+			"progress": 100,
+		},
+	})
+	st := toPlanState(store.TechnicalPlanMetum{Extra: extra}, nil, nil, store.TechnicalPlanGenerationConfig{
+		GlobalFactsMode: "omit",
+	})
+	if st.GlobalFactsMode != "omit" {
+		t.Fatalf("mode=%q", st.GlobalFactsMode)
+	}
+	if len(st.GlobalFacts) != 1 {
+		t.Fatalf("facts=%#v", st.GlobalFacts)
+	}
+	if st.GlobalFactsTask == nil || st.GlobalFactsTask["status"] != "success" {
+		t.Fatalf("task=%#v", st.GlobalFactsTask)
+	}
+}

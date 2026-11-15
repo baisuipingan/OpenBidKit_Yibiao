@@ -1157,6 +1157,7 @@ const POSITIONAL_ARGS: Record<string, string[]> = {
   'technicalPlan.selectBidSection': ['sectionId'],
   'technicalPlan.readTenderSourceMarkdown': ['sourceId'],
   'technicalPlan.removeTenderDocument': ['sourceId'],
+  'technicalPlan.saveGlobalFacts': ['globalFacts'],
   'technicalPlan.saveSectionContent': ['nodeId', 'content'],
   'knowledgeBase.uploadDocuments': ['folderId', 'filePaths'],
   'knowledgeBase.renameFolder': ['folderId', 'name'],

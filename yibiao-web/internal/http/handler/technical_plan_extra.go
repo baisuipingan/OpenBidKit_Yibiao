@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 
 	"github.com/labstack/echo/v4"
 
@@ -253,23 +254,27 @@ func (h *TechnicalPlan) SaveOutlineSelection(c echo.Context) error {
 }
 
 // SaveGlobalFacts 保存全局事实（项目名称、金额、工期等）。
+//
+// 兼容多种 Web 桥接体：
+//   - { "globalFacts": [...] }（POSITIONAL_ARGS 正确映射）
+//   - { "facts": [...] }
+//   - { "value": [...] }（旧桥接把数组包成 value）
+//   - 直接 [...] 数组
 func (h *TechnicalPlan) SaveGlobalFacts(c echo.Context) error {
-	var payload map[string]any
-	if err := c.Bind(&payload); err != nil {
-		return httpx.BadRequest("请求体格式错误")
+	body, err := io.ReadAll(c.Request().Body)
+	if err != nil {
+		return httpx.BadRequest("请求体读取失败")
+	}
+	facts, ok := service.NormalizeGlobalFactsPayload(body)
+	if !ok {
+		return httpx.BadRequest("请求体格式错误：需要全局事实数组")
 	}
 
-	extra, err := h.loadExtra(c)
-	if err != nil {
-		return err
+	extra, loadErr := h.loadExtra(c)
+	if loadErr != nil {
+		return loadErr
 	}
-	if facts, ok := payload["globalFacts"]; ok {
-		extra["globalFacts"] = facts
-	} else if facts, ok := payload["facts"]; ok {
-		extra["globalFacts"] = facts
-	} else {
-		extra["globalFacts"] = payload
-	}
+	extra["globalFacts"] = facts
 
 	if err := h.saveExtra(c, extra); err != nil {
 		return err

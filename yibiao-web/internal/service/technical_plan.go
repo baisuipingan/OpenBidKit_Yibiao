@@ -143,6 +143,7 @@ type PlanState struct {
 	ReferenceKnowledgeIDs      []string       `json:"referenceKnowledgeDocumentIds"`
 	GlobalFactsMode            string         `json:"globalFactsMode"`
 	GlobalFacts                []any          `json:"globalFacts"`
+	GlobalFactsTask            map[string]any `json:"globalFactsTask"`
 	ExportTemplateID           string         `json:"exportTemplateId"`
 	ExportTemplateScope        string         `json:"exportTemplateScope"`
 	ContentGenerationOptions   map[string]any `json:"contentGenerationOptions"`
@@ -359,6 +360,7 @@ func toPlanState(
 		ContentGenerationTask:     nil,
 		ReferenceKnowledgeIDs:     append([]string{}, meta.ReferenceKnowledgeDocumentIds...),
 		GlobalFacts:               []any{},
+		GlobalFactsTask:           nil,
 		ContentGenerationSections: map[string]any{},
 		ContentGenerationRuntime:  buildContentRuntime(nodes),
 		ContentGenerationPlans:    map[string]any{},
@@ -427,6 +429,9 @@ func toPlanState(
 		if json.Unmarshal(meta.Extra, &extra) == nil {
 			if v, ok := extra["globalFacts"].([]any); ok {
 				st.GlobalFacts = v
+			}
+			if v, ok := extra["globalFactsTask"].(map[string]any); ok {
+				st.GlobalFactsTask = v
 			}
 			if v, ok := extra["bidAnalysisTasks"].(map[string]any); ok {
 				st.BidAnalysisTasks = v

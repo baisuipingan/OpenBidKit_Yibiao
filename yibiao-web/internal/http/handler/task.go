@@ -14,6 +14,7 @@ import (
 	"github.com/patrick/yibiao-web/internal/service/agent"
 	"github.com/patrick/yibiao-web/internal/service/agent/bidanalysis"
 	"github.com/patrick/yibiao-web/internal/service/agent/content"
+	"github.com/patrick/yibiao-web/internal/service/agent/globalfacts"
 	"github.com/patrick/yibiao-web/internal/service/agent/outline"
 	"github.com/patrick/yibiao-web/internal/service/artifact"
 	"github.com/patrick/yibiao-web/internal/service/settings"
@@ -37,16 +38,17 @@ import (
 //
 //	把桥接层（前端熟悉的 tasks.* 语义）翻译成具体的 Agent 任务。
 type Task struct {
-	planSvc   *service.TechnicalPlanService
-	outline   *outline.Runner
-	bidRunner *bidanalysis.Runner
-	content   *content.Runner
-	tpSvc     *service.TechnicalPlanService
-	settings  *settings.Service
-	artifacts *artifact.Service
-	bus       *events.Bus
-	logger    *slog.Logger
-	toolDecls []any
+	planSvc     *service.TechnicalPlanService
+	outline     *outline.Runner
+	bidRunner   *bidanalysis.Runner
+	content     *content.Runner
+	globalFacts *globalfacts.Runner
+	tpSvc       *service.TechnicalPlanService
+	settings    *settings.Service
+	artifacts   *artifact.Service
+	bus         *events.Bus
+	logger      *slog.Logger
+	toolDecls   []any
 
 	mu    sync.RWMutex
 	tasks map[string]*taskRecord
@@ -71,21 +73,23 @@ func NewTask(
 	outlineRunner *outline.Runner,
 	bidRunner *bidanalysis.Runner,
 	contentRunner *content.Runner,
+	globalFactsRunner *globalfacts.Runner,
 	settingsSvc *settings.Service,
 	artifactSvc *artifact.Service,
 	bus *events.Bus,
 ) *Task {
 	return &Task{
-		planSvc:   planSvc,
-		outline:   outlineRunner,
-		bidRunner: bidRunner,
-		content:   contentRunner,
-		tpSvc:     planSvc,
-		settings:  settingsSvc,
-		artifacts: artifactSvc,
-		bus:       bus,
-		logger:    slog.Default(),
-		tasks:     make(map[string]*taskRecord),
+		planSvc:     planSvc,
+		outline:     outlineRunner,
+		bidRunner:   bidRunner,
+		content:     contentRunner,
+		globalFacts: globalFactsRunner,
+		tpSvc:       planSvc,
+		settings:    settingsSvc,
+		artifacts:   artifactSvc,
+		bus:         bus,
+		logger:      slog.Default(),
+		tasks:       make(map[string]*taskRecord),
 	}
 }
 
@@ -98,6 +102,7 @@ func (t *Task) SetTools(decls []any) {
 func (t *Task) Register(g *echo.Group) {
 	g.POST("/tasks/start-outline-generation", t.StartOutlineGeneration)
 	g.POST("/tasks/start-bid-analysis", t.StartBidAnalysis)
+	g.POST("/tasks/start-global-facts-generation", t.StartGlobalFactsGeneration)
 	g.POST("/tasks/start-content-generation", t.StartContentGeneration)
 	// 手动重同步：把某次任务的产物重新回写进 meta。
 	// 用途：产物已入库但 meta 没同步（或改了映射规则要重跑）时，

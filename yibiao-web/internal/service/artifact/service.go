@@ -36,17 +36,18 @@ import (
 
 // 资产类别常量。
 const (
-	KindTender     = "tender"     // 招标文件原文/转换后 Markdown
-	KindOriginal   = "original"   // 原方案
-	KindBidItems   = "bid-items"  // 招标解析项产物
-	KindOutline    = "outline"    // 目录
-	KindContent    = "content"    // 正文
-	KindImage      = "image"      // 配图
-	KindExport     = "export"     // 导出的 Word
-	KindKnowledge  = "knowledge"  // 知识库文档
-	KindCredential = "credential" // 资信库素材
-	KindTemplate   = "template"   // 导出模板
-	KindAttachment = "attachment" // 其他附件
+	KindTender      = "tender"       // 招标文件原文/转换后 Markdown
+	KindOriginal    = "original"     // 原方案
+	KindBidItems    = "bid-items"    // 招标解析项产物
+	KindOutline     = "outline"      // 目录
+	KindGlobalFacts = "global-facts" // 全局事实变量
+	KindContent     = "content"      // 正文
+	KindImage       = "image"        // 配图
+	KindExport      = "export"       // 导出的 Word
+	KindKnowledge   = "knowledge"    // 知识库文档
+	KindCredential  = "credential"   // 资信库素材
+	KindTemplate    = "template"     // 导出模板
+	KindAttachment  = "attachment"   // 其他附件
 )
 
 // 错误。
