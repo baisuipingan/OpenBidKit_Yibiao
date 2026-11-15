@@ -193,9 +193,13 @@ UPDATE technical_plan_meta
 }
 
 // PersistContentGenerationStart 写入正文生成 running 态。
+//
+// pendingSections 可选：nodeID → {id,title,status}，启动时写入 pending，
+// 避免 UI 在成功启动后仍显示全量「待生成」且任务态为空。
 func (s *TechnicalPlanService) PersistContentGenerationStart(
 	ctx context.Context,
 	tenantID, projectID, taskID string,
+	pendingSections map[string]any,
 ) error {
 	tid, pid, err := s.resolve(tenantID, projectID)
 	if err != nil {
@@ -221,6 +225,9 @@ func (s *TechnicalPlanService) PersistContentGenerationStart(
 		"progress":   5,
 		"logs":       []string{"正文生成任务已启动"},
 		"started_at": time.Now().UTC().Format(time.RFC3339),
+	}
+	if len(pendingSections) > 0 {
+		extra["contentGenerationSections"] = pendingSections
 	}
 	raw, _ := json.Marshal(extra)
 	return s.q.UpdateTechnicalPlanExtra(ctx, store.UpdateTechnicalPlanExtraParams{

@@ -3,16 +3,20 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/labstack/echo/v4"
 
+	"github.com/patrick/yibiao-web/internal/events"
 	"github.com/patrick/yibiao-web/internal/http/httpx"
 	"github.com/patrick/yibiao-web/internal/service"
 	"github.com/patrick/yibiao-web/internal/service/agent"
 	"github.com/patrick/yibiao-web/internal/service/agent/content"
+	"github.com/patrick/yibiao-web/internal/service/artifact"
 	"github.com/patrick/yibiao-web/internal/service/imageplan"
 	"github.com/patrick/yibiao-web/internal/service/knowledge"
 	"github.com/patrick/yibiao-web/internal/service/settings"
@@ -24,6 +28,9 @@ type Content struct {
 	runner    *content.Runner
 	planSvc   *service.TechnicalPlanService
 	settings  *settings.Service
+	artifacts *artifact.Service
+	bus       *events.Bus
+	logger    *slog.Logger
 	toolDecls []any
 
 	mu    sync.RWMutex
@@ -59,12 +66,21 @@ type contentTaskState struct {
 }
 
 // NewContent 创建 handler。
-func NewContent(runner *content.Runner, planSvc *service.TechnicalPlanService, settingsSvc *settings.Service) *Content {
+func NewContent(
+	runner *content.Runner,
+	planSvc *service.TechnicalPlanService,
+	settingsSvc *settings.Service,
+	artifactSvc *artifact.Service,
+	bus *events.Bus,
+) *Content {
 	return &Content{
-		runner:   runner,
-		planSvc:  planSvc,
-		settings: settingsSvc,
-		tasks:    make(map[string]*contentTaskState),
+		runner:    runner,
+		planSvc:   planSvc,
+		settings:  settingsSvc,
+		artifacts: artifactSvc,
+		bus:       bus,
+		logger:    slog.Default(),
+		tasks:     make(map[string]*contentTaskState),
 	}
 }
 
@@ -76,6 +92,23 @@ func (h *Content) SetTaskRunLister(l TaskRunLister) {
 // SetTools 注入工具声明。
 func (h *Content) SetTools(decls []any) {
 	h.toolDecls = decls
+}
+
+// MarkDone 标记内存任务完成，避免 TASK_RUNNING 卡住。
+func (h *Content) MarkDone(taskID, status string) {
+	if taskID == "" {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	rec, ok := h.tasks[taskID]
+	if !ok || rec == nil || rec.Done {
+		return
+	}
+	rec.Done = true
+	if status != "" {
+		rec.Status = status
+	}
 }
 
 // Register 注册路由。
@@ -165,9 +198,23 @@ func (h *Content) Generate(c echo.Context) error {
 		provider, modelCfg = p, mc
 	}
 
-	if req.TenderMarkdownPath == "" {
-		return httpx.Fail(c, "MISSING_TENDER", "缺少招标文件，请先导入招标文件")
+	// 与 outline/bid-analysis 相同：前端不传本地路径时，从资产库物化 tender.md。
+	tenderPath, cleanup, matErr := MaterializeTenderMarkdown(
+		c.Request().Context(), h.artifacts, tenantID, projectID, req.TenderMarkdownPath,
+	)
+	if matErr != nil {
+		if errors.Is(matErr, ErrMissingTender) {
+			return httpx.Fail(c, "MISSING_TENDER", "缺少招标文件，请先导入招标文件")
+		}
+		return httpx.Internal(matErr)
 	}
+	defer cleanup()
+
+	planState, loadErr := h.planSvc.LoadState(c.Request().Context(), tenantID, projectID)
+	if loadErr != nil {
+		return httpx.Internal(loadErr)
+	}
+	globalFacts := applyContentPlanDefaults(&req, planState)
 
 	// 从目录树提取待生成小节
 	sections, err := h.collectSections(c.Request().Context(), tenantID, projectID, req)
@@ -189,18 +236,40 @@ func (h *Content) Generate(c echo.Context) error {
 	h.mu.RUnlock()
 
 	var (
-		mu     sync.Mutex
-		events []json.RawMessage
-		owner  string
+		mu       sync.Mutex
+		evBuffer []json.RawMessage
+		owner    string
 	)
 
 	onEvent := func(ev agent.TaskEvent) {
 		mu.Lock()
-		defer mu.Unlock()
-		events = append(events, ev.Data)
-		if len(events) > 3000 {
-			events = events[len(events)-2000:]
+		evBuffer = append(evBuffer, ev.Data)
+		if len(evBuffer) > 3000 {
+			evBuffer = evBuffer[len(evBuffer)-2000:]
 		}
+		tid := owner
+		mu.Unlock()
+		if tid == "" {
+			return
+		}
+		h.publishContentTask(tenantID, userID, projectID, map[string]any{
+			"task": map[string]any{
+				"task_id":  tid,
+				"type":     "content-generation",
+				"status":   "running",
+				"progress": 15,
+			},
+			"technicalPlanPatch": map[string]any{
+				"contentGenerationTask": map[string]any{
+					"task_id":  tid,
+					"type":     "content-generation",
+					"status":   "running",
+					"progress": 15,
+					"logs":     []string{"正文生成进行中"},
+				},
+			},
+			"agentEvent": json.RawMessage(ev.Data),
+		})
 	}
 
 	// 知识库素材匹配
@@ -253,11 +322,12 @@ func (h *Content) Generate(c echo.Context) error {
 		TenantID:           tenantID,
 		ProjectID:          projectID,
 		OwnerID:            userID,
-		TenderMarkdownPath: req.TenderMarkdownPath,
+		TenderMarkdownPath: tenderPath,
 		Provider:           provider,
 		Model:              modelCfg,
 		ToolDecls:          h.toolDecls,
 		Sections:           sections,
+		GlobalFacts:        globalFacts,
 		MinWords:           req.TotalWords,
 		ImagePlan:          imagePlanText,
 		OnEvent:            onEvent,
@@ -266,9 +336,9 @@ func (h *Content) Generate(c echo.Context) error {
 		return httpx.Internal(err)
 	}
 
-	owner = result.TaskID
 	mu.Lock()
-	buffered := events
+	owner = result.TaskID
+	buffered := append([]json.RawMessage(nil), evBuffer...)
 	mu.Unlock()
 
 	h.mu.Lock()
@@ -280,21 +350,63 @@ func (h *Content) Generate(c echo.Context) error {
 	}
 	h.mu.Unlock()
 
+	pendingSections := map[string]any{}
+	for _, sec := range sections {
+		pendingSections[sec.NodeID] = map[string]any{
+			"id":     sec.NodeID,
+			"title":  sec.Title,
+			"status": "running",
+			"content": "",
+		}
+	}
+	if persistErr := h.planSvc.PersistContentGenerationStart(
+		c.Request().Context(), tenantID, projectID, result.TaskID, pendingSections,
+	); persistErr != nil && h.logger != nil {
+		h.logger.Warn("写入正文启动状态失败: " + persistErr.Error())
+	}
+
 	// 更新步骤
 	if err := h.planSvc.UpdateStep(c.Request().Context(), tenantID, projectID, "content-edit"); err != nil {
 		c.Logger().Warnf("更新步骤失败: %v", err)
 	}
 
+	runningTask := map[string]any{
+		"task_id":  result.TaskID,
+		"type":     "content-generation",
+		"status":   "running",
+		"progress": 5,
+		"logs":     []string{"正文生成任务已启动"},
+	}
+	h.publishContentTask(tenantID, userID, projectID, map[string]any{
+		"task": runningTask,
+		"technicalPlanPatch": map[string]any{
+			"contentGenerationTask":     runningTask,
+			"contentGenerationSections": pendingSections,
+		},
+	})
+
 	resp := map[string]any{
 		"taskId":       result.TaskID,
 		"sectionCount": result.SectionCount,
 		"status":       "running",
+		"type":         "content-generation",
 	}
 	if plan != nil {
 		resp["imagePlan"] = plan
 	}
 
 	return httpx.OK(c, resp)
+}
+
+func (h *Content) publishContentTask(tenantID, userID, projectID string, payload map[string]any) {
+	if h.bus == nil {
+		return
+	}
+	h.bus.Publish("task", events.Scope{
+		TenantID:  tenantID,
+		UserID:    userID,
+		ProjectID: projectID,
+	}, payload)
 }
 
 // collectSections 从目录树提取待生成小节。

@@ -2,7 +2,10 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,12 +21,6 @@ import (
 	"github.com/patrick/yibiao-web/internal/service/agent/outline"
 	"github.com/patrick/yibiao-web/internal/service/artifact"
 	"github.com/patrick/yibiao-web/internal/service/settings"
-	"github.com/patrick/yibiao-web/internal/service/storage"
-	"io"
-	"log/slog"
-	"os"
-	"path/filepath"
-	"strings"
 )
 
 // Task 实现前端 `tasks.*` 命名空间的接口。
@@ -809,15 +806,22 @@ func (t *Task) StartContentGeneration(c echo.Context) error {
 		"progress": 5,
 		"logs":     []string{"正文生成任务已启动"},
 	}
+	pendingSections := map[string]any{}
+	for _, sec := range sections {
+		pendingSections[sec.NodeID] = map[string]any{
+			"id": sec.NodeID, "title": sec.Title, "status": "running", "content": "",
+		}
+	}
 	if persistErr := t.tpSvc.PersistContentGenerationStart(
-		c.Request().Context(), tenantID, projectID, result.TaskID,
+		c.Request().Context(), tenantID, projectID, result.TaskID, pendingSections,
 	); persistErr != nil && t.logger != nil {
 		t.logger.Warn("写入正文启动状态失败: " + persistErr.Error())
 	}
 	t.publishTask(tenantID, userID, projectID, map[string]any{
 		"task": runningTask,
 		"technicalPlanPatch": map[string]any{
-			"contentGenerationTask": runningTask,
+			"contentGenerationTask":     runningTask,
+			"contentGenerationSections": pendingSections,
 		},
 	})
 
@@ -838,48 +842,16 @@ func (t *Task) StartContentGeneration(c echo.Context) error {
 //
 // 调用方负责删除临时文件。
 func (t *Task) materializeTenderMarkdown(c echo.Context, tenantID, projectID, explicit string) (string, func(), error) {
-	noop := func() {}
-
-	// 已给路径且文件存在 → 直接用
-	if explicit != "" {
-		if _, err := os.Stat(explicit); err == nil {
-			return explicit, noop, nil
+	path, cleanup, err := MaterializeTenderMarkdown(
+		c.Request().Context(), t.artifacts, tenantID, projectID, explicit,
+	)
+	if err != nil {
+		if errors.Is(err, ErrMissingTender) {
+			return "", cleanup, httpx.Fail(c, "MISSING_TENDER", "未找到招标文件，请先导入")
 		}
+		return "", cleanup, httpx.Internal(err)
 	}
-
-	if t.artifacts == nil {
-		return "", noop, httpx.Fail(c, "MISSING_TENDER", "缺少招标文件路径")
-	}
-
-	// 从 artifact 取最新的 tender.md
-	scope := storage.Scope{TenantID: tenantID, ProjectID: projectID}
-	rc, _, err := t.artifacts.Get(c.Request().Context(), scope, "tender.md", 0)
-	if err != nil {
-		return "", noop, httpx.Fail(c, "MISSING_TENDER", "未找到招标文件，请先导入")
-	}
-	defer func() { _ = rc.Close() }()
-
-	dir, err := os.MkdirTemp("", "yb-tender-*")
-	if err != nil {
-		return "", noop, httpx.Internal(err)
-	}
-
-	dst := filepath.Join(dir, "tender.md")
-	f, err := os.Create(dst)
-	if err != nil {
-		_ = os.RemoveAll(dir)
-		return "", noop, httpx.Internal(err)
-	}
-
-	if _, err := io.Copy(f, rc); err != nil {
-		_ = f.Close()
-		_ = os.RemoveAll(dir)
-		return "", noop, httpx.Internal(err)
-	}
-	_ = f.Close()
-
-	cleanup := func() { _ = os.RemoveAll(dir) }
-	return dst, cleanup, nil
+	return path, cleanup, nil
 }
 
 // resolveProvider 取模型配置：请求里带就用，否则从租户配置读。

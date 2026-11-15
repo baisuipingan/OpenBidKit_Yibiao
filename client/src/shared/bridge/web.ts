@@ -304,7 +304,8 @@ async function request<T>(path: string, body?: unknown, opts?: { retry?: boolean
 
   if (!envelope.ok) {
     const err = envelope.error || { code: 'UNKNOWN', message: '未知错误' };
-    throw new BridgeError(err.code, err.message, err.detail);
+    const message = String(err.message || '').trim() || err.code || '未知错误';
+    throw new BridgeError(err.code || 'UNKNOWN', message, err.detail);
   }
 
   return envelope.data as T;
@@ -1025,6 +1026,7 @@ const NS_LOCAL: Record<string, (...args: any[]) => unknown> = {
   'tasks.startContentGeneration': (payload: unknown) => {
     const p = (payload || {}) as Record<string, any>;
     const options = (p.generationOptions || {}) as Record<string, any>;
+    const word = (p.outlineWordControlSnapshot || p.wordControl || options.outlineWordControlSnapshot || {}) as Record<string, any>;
 
     // 配图开关：三个都关 = 不配图
     const useImages = Boolean(options.useAiImages || options.useMermaidImages || options.useHtmlImages);
@@ -1035,6 +1037,12 @@ const NS_LOCAL: Record<string, (...args: any[]) => unknown> = {
       // 知识库引用（Web 版新增能力）
       disableKnowledge: options.useKnowledge === false,
     };
+
+    // 字数：优先请求显式字段，否则带上快照（服务端也会从 load-state 补齐）
+    const totalWords = Number(p.totalWords ?? word.minimumWords ?? word.maximumWords ?? 0);
+    const sectionWords = Number(p.targetWordsPerSection ?? word.sectionWords ?? 0);
+    if (totalWords > 0) body.totalWords = totalWords;
+    if (sectionWords > 0) body.targetWordsPerSection = sectionWords;
 
     // 图片数量：桌面版是数字，Web 后端也是
     if (typeof options.imageQuantity === 'number') {

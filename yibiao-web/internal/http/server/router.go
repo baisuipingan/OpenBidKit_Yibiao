@@ -195,9 +195,10 @@ func New(d Deps) *echo.Echo {
 	} else if n > 0 {
 		d.Logger.Info("已清理僵死任务", slog.Int64("count", n))
 	}
-	// taskH 在下方装配；完成回调通过闭包变量调用 MarkDone，
+	// taskH / contentH 在下方装配；完成回调通过闭包变量调用 MarkDone，
 	// 不依赖 /tasks/events SSE 是否有订阅者。
 	var taskH *handler.Task
+	var contentH *handler.Content
 
 	bidRunner := bidanalysis.NewRunner(agentSvc, artifactSvc, d.Logger)
 	// 分析产物入库后回写到 technical_plan_meta，
@@ -290,6 +291,9 @@ func New(d Deps) *echo.Echo {
 		status := "success"
 		if !succeeded || err != nil || n == 0 {
 			status = "error"
+		}
+		if contentH != nil {
+			contentH.MarkDone(taskID, status)
 		}
 		if taskH != nil {
 			taskH.MarkDone(taskID, status)
@@ -419,7 +423,7 @@ func New(d Deps) *echo.Echo {
 	aiH := handler.NewAI(settingsSvc)
 	outlineH := handler.NewOutline(outlineRunner, tpSvc)
 	taskH = handler.NewTask(tpSvc, outlineRunner, bidRunner, contentRunner, globalFactsRunner, settingsSvc, artifactSvc, d.Bus)
-	contentH := handler.NewContent(contentRunner, tpSvc, settingsSvc)
+	contentH = handler.NewContent(contentRunner, tpSvc, settingsSvc, artifactSvc, d.Bus)
 
 	consistencyH := handler.NewConsistency(consistencyRunner, tpSvc, settingsSvc)
 	projectH := handler.NewProject(store.New(d.Pool))

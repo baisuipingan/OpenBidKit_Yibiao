@@ -752,9 +752,10 @@ function ContentEditPage({
       return;
     }
 
-    await window.yibiao?.tasks.startContentGeneration({
+    await window.yibiao!.tasks.startContentGeneration({
       regenerate,
       generationOptions: savedGenerationOptions,
+      outlineWordControlSnapshot,
     });
     trackConfigUsage({
       table_requirement: savedGenerationOptions.tableRequirement,
@@ -827,7 +828,10 @@ function ContentEditPage({
             : 'start';
       await launchContentGeneration({ savedGenerationOptions, config, regenerate, contentGenerationAction });
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '启动正文生成任务失败', 'error');
+      const message = (error && typeof error === 'object' && 'message' in error && String((error as Error).message || '').trim())
+        || (error && typeof error === 'object' && 'code' in error && String((error as { code?: string }).code || '').trim())
+        || '启动正文生成任务失败';
+      showToast(message, 'error');
     } finally {
       generationStarting.current = false;
       setGenerationSubmitting(false);
