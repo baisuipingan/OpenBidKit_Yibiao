@@ -1,0 +1,28 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    schema: "../internal/db/migrations"
+    queries: "query"
+    gen:
+      go:
+        package: "store"
+        out: "../internal/store"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_prepared_queries: false
+        emit_interface: true
+        emit_empty_slices: true
+        # 不生成指针类型：可空列直接用 pgtype 或零值语义。
+        # 指针会让 *time.Time 变成 **time.Time（因为 pgx/v5 的 nullable 映射叠加），
+        # 在业务层到处判断两层指针很别扭。
+        emit_pointers_for_null_types: false
+        overrides:
+          - db_type: "uuid"
+            go_type: "github.com/google/uuid.UUID"
+          - db_type: "uuid"
+            nullable: true
+            go_type: "*github.com/google/uuid.UUID"
+          - db_type: "timestamptz"
+            go_type: "time.Time"
+          # timestamptz 可空时不覆盖，交给 sqlc 生成 pgtype.Timestamptz
+          # inet 用标准库 netip，sqlc 默认即此，不覆盖

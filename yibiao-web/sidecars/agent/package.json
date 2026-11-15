@@ -1,0 +1,20 @@
+{
+  "name": "yibiao-agent-sidecar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "易标 Web 版 Agent sidecar：封装 Pi SDK，向 Go 主服务提供 HTTP 接口",
+  "main": "src/index.mjs",
+  "scripts": {
+    "start": "node src/index.mjs",
+    "dev": "node --watch src/index.mjs"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "0.80.10",
+    "@earendil-works/pi-coding-agent": "0.80.10",
+    "typebox": "^1.1.38"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}

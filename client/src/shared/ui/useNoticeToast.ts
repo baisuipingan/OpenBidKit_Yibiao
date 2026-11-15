@@ -8,6 +8,17 @@ export const githubStarNotice: AppMenuNotice = {
   externalUrl: 'https://github.com/FB208/OpenBidKit_Yibiao',
 };
 
+/**
+ * Web 版专属提示：本地能力在浏览器里做不到。
+ *
+ * 与 githubStarNotice 的区别：那些是"还没开发"，
+ * 这个是"浏览器环境本身不具备该能力"（需要本地文件系统、
+ * 调用本机 Office/Ghostscript 等），不该承诺开发进度。
+ */
+export const webUnavailableNotice: AppMenuNotice = {
+  message: '该功能需要读取本机文件或调用本地程序，当前网页版无法提供，请使用桌面版。',
+};
+
 // 以提示条展示未开放功能说明，有外部链接时附带直达按钮。
 export function useNoticeToast() {
   const { showToast } = useToast();

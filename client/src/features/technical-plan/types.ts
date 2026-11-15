@@ -75,6 +75,11 @@ export interface ContentGenerationOptions {
   useFourImagesLayout: boolean;
   htmlImageTypes: string;
   tableRequirement: ContentTableRequirement;
+  // 是否引用知识库素材（Web 版独有）。
+  //
+  // 知识库里是本单位积累的素材（资质、案例、技术参数），
+  // 引用了正文才会写"我们做过什么"，不引用就只能编。
+  useKnowledge?: boolean;
 }
 
 export interface TechnicalPlanGenerationConfig {

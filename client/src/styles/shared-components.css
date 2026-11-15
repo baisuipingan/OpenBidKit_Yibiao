@@ -1,25 +1,41 @@
 /* [559-728] floating-toolbar + drag-handle + group/separator/button variants + settings-page override */
+
+/* ------------------------------------------------------------
+ * 页面操作栏
+ *
+ * 原来用 position:absolute 悬浮在内容上方，会遮住列表最后几行。
+ * 改为「贴底固定」：脱离内容流的遮挡关系，内容区自己加
+ * padding-bottom 预留高度（见 .has-page-toolbar）。
+ *
+ * 仍然保留浮动胶囊造型 —— 它比通栏长条更轻，且不切断页面视觉。
+ * ------------------------------------------------------------ */
 .floating-toolbar {
-  position: absolute;
-  right: 42px;
-  bottom: 28px;
-  left: 42px;
-  z-index: 20;
+  position: fixed;
+  right: auto;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
   display: flex;
   width: max-content;
-  max-width: calc(100% - 84px);
+  max-width: calc(100vw - 120px);
   align-items: center;
   justify-content: center;
   gap: 0;
-  margin: 0 auto;
+  margin: 0;
   padding: 8px;
   color: var(--yb-text);
-  background: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.94);
   border: 1px solid rgba(228, 233, 240, 0.92);
   border-radius: var(--yb-radius-pill);
-  box-shadow: var(--yb-shadow-lg);
+  box-shadow: 0 8px 32px rgba(16, 24, 40, 0.14), 0 2px 8px rgba(16, 24, 40, 0.06);
   backdrop-filter: blur(18px);
   -webkit-app-region: no-drag;
+}
+
+/* 内容区底部留出操作栏高度，避免最后一行被盖住 */
+.has-page-toolbar {
+  padding-bottom: 88px !important;
 }
 
 .floating-toolbar.is-dragging {
@@ -583,22 +599,131 @@
 }
 
 /* 统一空态卡片（shared/ui/EmptyState.tsx）：虚线卡片 + 标题/说明 + 可选引导按钮 */
+/* ============================================================
+ * 统一空态（shared/ui/EmptyState.tsx）
+ *
+ * 三段式：图标 → 标题+说明 → 主操作。
+ * 关键原则：空态必须给出下一步可执行的动作，
+ * 只写「暂无数据」等于把用户卡在这里。
+ * ============================================================ */
+
 .yb-empty-state {
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   grid-column: 1 / -1;
-  align-content: center;
-  justify-items: center;
-  gap: 8px;
-  padding: 42px 24px;
+  gap: 0;
+  padding: 40px 24px;
+  text-align: center;
   color: var(--yb-text-soft);
   background: rgba(255, 255, 255, 0.72);
   border: 1px dashed rgba(94, 111, 143, 0.24);
   border-radius: var(--yb-radius-xl);
 }
 
-.yb-empty-state strong {
+/* 尺寸变体 */
+.yb-empty-state.is-card {
+  padding: 34px 24px;
+}
+
+.yb-empty-state.is-page {
+  padding: 72px 24px;
+  min-height: 320px;
+  border-style: solid;
+  border-color: var(--yb-border);
+  background: var(--yb-surface);
+}
+
+/* 图标 */
+.yb-empty-state-icon {
+  width: 46px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1;
+  margin-bottom: 14px;
+  background: var(--yb-border-soft);
+  color: var(--yb-text-muted);
+}
+
+.yb-empty-state.is-page .yb-empty-state-icon {
+  width: 54px;
+  height: 54px;
+  border-radius: 15px;
+  font-size: 23px;
+}
+
+/* 语气变体：只改图标配色，标题始终保持正文色 */
+.yb-empty-state.is-info .yb-empty-state-icon {
+  background: var(--yb-primary-soft);
+  color: var(--yb-primary);
+}
+
+.yb-empty-state.is-success .yb-empty-state-icon {
+  background: var(--yb-success-soft);
+  color: var(--yb-success);
+}
+
+.yb-empty-state.is-warning .yb-empty-state-icon {
+  background: var(--yb-warning-soft);
+  color: var(--yb-warning);
+}
+
+.yb-empty-state.is-error .yb-empty-state-icon {
+  background: #feeceb;
+  color: var(--yb-danger);
+}
+
+/* 标题与说明 */
+.yb-empty-state-title,
+.yb-empty-state strong.yb-empty-state-title {
+  display: block;
   color: var(--yb-text);
-  font-size: 16px;
+  font-size: 15px;
+  font-weight: 650;
+  margin: 0 0 6px;
+}
+
+.yb-empty-state.is-page .yb-empty-state-title {
+  font-size: 17px;
+}
+
+.yb-empty-state-hint {
+  display: block;
+  max-width: 460px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--yb-text-muted);
+  margin: 0;
+}
+
+.yb-empty-state.is-page .yb-empty-state-hint {
+  font-size: 13px;
+}
+
+/* 操作区 */
+.yb-empty-state-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+/* 底部补充提示 */
+.yb-empty-state-tip {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--yb-border);
+  font-size: 12px;
+  color: var(--yb-text-muted);
+  max-width: 460px;
+  line-height: 1.7;
 }
 
 /* 可点击选项卡片（shared/ui/OptionCardList.tsx）：整张卡片是按钮，左侧图标、右侧箭头；is-highlighted 标出推荐或上次的选择 */

@@ -16,6 +16,8 @@ export const defaultContentGenerationOptions: ContentGenerationOptions = {
   useFourImagesLayout: true,
   htmlImageTypes: DEFAULT_HTML_IMAGE_TYPES,
   tableRequirement: 'heavy',
+  // 默认开启：有素材就用，没有就检索不到（不额外耗时）
+  useKnowledge: true,
 };
 
 function isContentTableRequirement(value: unknown): value is ContentTableRequirement {
@@ -43,5 +45,6 @@ export function normalizeContentGenerationOptions(
     useFourImagesLayout: Boolean(options?.useFourImagesLayout ?? fallback.useFourImagesLayout),
     htmlImageTypes: String(options?.htmlImageTypes ?? fallback.htmlImageTypes),
     tableRequirement: isContentTableRequirement(options?.tableRequirement) ? options.tableRequirement : fallback.tableRequirement,
+    useKnowledge: options?.useKnowledge === undefined ? Boolean(fallback.useKnowledge) : Boolean(options.useKnowledge),
   };
 }

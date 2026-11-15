@@ -1043,6 +1043,10 @@ function KnowledgeBasePage() {
     );
   }
 
+  // 统计卡数据：知识条目总数 + 文档内容块数（近似字数）
+  const totalKnowledgePoints = index.documents.reduce((sum, doc) => sum + (doc.item_count || 0), 0);
+  const totalDocChars = index.documents.reduce((sum, doc) => sum + (doc.block_count || 0), 0);
+
   return (
     <>
       <div className="page-stack knowledge-page">
@@ -1083,6 +1087,29 @@ function KnowledgeBasePage() {
             </button>
           </div>
         </section>
+
+        {/* 顶部统计：让用户一眼看到知识库体量，
+            也让「只有一条文档」时不显得整页空荡 */}
+        {!listLoading && !submittedSearchKeyword && (
+          <section className="knowledge-stats" aria-label="知识库概况">
+            <div className="knowledge-stat">
+              <strong>{index.documents.length}</strong>
+              <span>文档总数</span>
+            </div>
+            <div className="knowledge-stat">
+              <strong>{index.folders.length}</strong>
+              <span>文件夹</span>
+            </div>
+            <div className="knowledge-stat">
+              <strong>{totalKnowledgePoints}</strong>
+              <span>知识条目</span>
+            </div>
+            <div className="knowledge-stat">
+              <strong>{totalDocChars}</strong>
+              <span>内容块</span>
+            </div>
+          </section>
+        )}
 
       {submittedSearchKeyword ? (
         <KnowledgeSearchResults
@@ -1200,6 +1227,18 @@ function KnowledgeBasePage() {
               <p>文档列表加载完成后会自动显示。</p>
             </div>
           ) : documents.length ? (
+            <>
+            {/* 表头：表格视图下让列含义明确。
+                用 grid 而非 <table>：需要保留拖拽排序和进度条，
+                原生表格的语义约束会碍事。 */}
+            <div className="knowledge-table-head" aria-hidden="true">
+              <span />
+              <span>文档名称</span>
+              <span>知识条目</span>
+              <span>状态</span>
+              <span>更新时间</span>
+              <span>操作</span>
+            </div>
             <div className="knowledge-document-list" ref={documentListRef}>
               {visibleDocuments.map((document) => {
                 const retrying = retryingDocumentIds.has(document.id);
@@ -1210,7 +1249,7 @@ function KnowledgeBasePage() {
                 const canOpenItems = document.status === 'success';
                 return (
                   <article
-                    className={`knowledge-document-card${dragging ? ' is-dragging' : ''}${dropTarget}`}
+                    className={`knowledge-document-card knowledge-table-row${dragging ? ' is-dragging' : ''}${dropTarget}`}
                     key={document.id}
                     onDragOver={(event) => handleDocumentDragOver(event, document)}
                     onDrop={(event) => { void handleDocumentDrop(event, document); }}
@@ -1223,8 +1262,12 @@ function KnowledgeBasePage() {
                       title={canDragDocument ? '拖拽排序或移动到文件夹' : '处理中，暂不可拖动'}
                       aria-hidden="true"
                     ><DragHandleDots2Icon /></span>
+                    {/* 表格行：每个单元格直接作为 grid 子项，不靠 display:contents 重排。
+                        这样列顺序由 DOM 决定，改列宽或加列都不会错位。 */}
+                    {/* 文档名单元格：扩展名徽标 + 文件名 + 所属文件夹，
+                        三者包在一个 grid 项里，避免多占一列导致错位 */}
                     <div
-                      className="knowledge-document-body"
+                      className="knowledge-table-cell-name"
                       role={canOpenItems ? 'button' : undefined}
                       tabIndex={canOpenItems ? 0 : undefined}
                       onClick={() => { if (canOpenItems) void openDocument(document, 'items'); }}
@@ -1234,29 +1277,45 @@ function KnowledgeBasePage() {
                           void openDocument(document, 'items');
                         }
                       }}
-                      title={canOpenItems ? '查看知识条目' : undefined}
+                      title={canOpenItems ? `查看知识条目：${document.file_name}` : document.file_name}
                     >
-                      <span className={`knowledge-doc-ext ${documentExtKind(document.file_name)}`} aria-hidden="true">{documentExtLabel(document.file_name)}</span>
-                      <div className="knowledge-document-info">
-                        <div className="knowledge-document-title">
-                          <strong title={document.file_name}>{document.file_name}</strong>
-                          <span className={`knowledge-status is-${document.status}`}>{statusLabels[document.status]}</span>
-                        </div>
-                        <div className="knowledge-document-meta">
-                          {document.status === 'error' && (
-                            <span className="knowledge-doc-error">{document.error || document.message || '处理失败'}</span>
-                          )}
-                          {processing && <span>{document.message}</span>}
-                          <span>{document.item_count || 0} 条知识</span>
-                          <span>{formatDocumentDate(document.created_at)}</span>
-                          {isAllDocuments && <span className="knowledge-doc-folder">{folderNameById.get(document.folder_id) || '未归档'}</span>}
-                          {developerMode && (
-                            <span>{document.block_count || 0} block / {document.candidate_item_count || 0} 候选 / {document.id}</span>
-                          )}
-                        </div>
-                        {processing && <ProgressBar value={document.progress || 0} label={`处理进度 ${document.progress}%`} />}
-                      </div>
+                      <span className={`knowledge-doc-ext ${documentExtKind(document.file_name)}`} aria-hidden="true">
+                        {documentExtLabel(document.file_name)}
+                      </span>
+                      <strong>{document.file_name}</strong>
+                      {isAllDocuments && <small>{folderNameById.get(document.folder_id) || '未归档'}</small>}
                     </div>
+
+                    <span className="knowledge-table-cell-count">
+                      {document.item_count || 0} 条
+                    </span>
+
+                    <span className={`knowledge-table-cell-status knowledge-status is-${document.status}`}>
+                      {statusLabels[document.status]}
+                    </span>
+
+                    <span className="knowledge-table-cell-date">
+                      {formatDocumentDate(document.created_at)}
+                    </span>
+
+                    {/* 跨列补充信息：错误详情、处理进度、开发者调试数据 */}
+                    {document.status === 'error' && (
+                      <div className="knowledge-table-cell-error">
+                        {document.error || document.message || '处理失败'}
+                      </div>
+                    )}
+                    {processing && (
+                      <div className="knowledge-table-cell-progress">
+                        <ProgressBar value={document.progress || 0} label={`处理进度 ${document.progress}%`} />
+                        {document.message && <small>{document.message}</small>}
+                      </div>
+                    )}
+                    {developerMode && (
+                      <div className="knowledge-table-cell-dev">
+                        {document.block_count || 0} block / {document.candidate_item_count || 0} 候选 / {document.id}
+                      </div>
+                    )}
+
                     <div className="knowledge-card-actions">
                       {developerMode && <button type="button" onClick={() => void openDocument(document, 'analysis')} disabled={!canOpenAnalysis(document)}>分析调试</button>}
                       <button type="button" onClick={() => void openDocument(document, 'markdown')} disabled={!canOpenMarkdown(document)}>Markdown</button>
@@ -1278,10 +1337,32 @@ function KnowledgeBasePage() {
                 </div>
               )}
             </div>
+              {/* 引导卡：文档少时填充下方空白，同时给出下一步动作 */}
+              <div className="knowledge-upload-hint">
+                <div className="knowledge-upload-hint-icon" aria-hidden="true">＋</div>
+                <strong>继续补充企业素材</strong>
+                <p>上传资质证书、历史方案、技术标准等资料，生成标书时会自动引用，内容更贴合你的实际情况。</p>
+                <button
+                  type="button"
+                  className="primary-action"
+                  onClick={() => void uploadDocuments()}
+                  disabled={loading || !canUploadToActiveFolder}
+                >
+                  选择文件上传
+                </button>
+              </div>
+            </>
+
           ) : (
             <EmptyState
               title={isAllDocuments ? '知识库还没有文档' : '当前文件夹暂无文档'}
-              hint={canUploadToActiveFolder ? '支持上传 .doc、.docx、.wps、.pdf、.md、.xls、.xlsx 文档，也可直接拖拽文件到此处。' : '先在左侧选择或新建一个文件夹。'}
+              hint={canUploadToActiveFolder
+                ? '上传企业的资质证书、历史方案、技术标准等资料，AI 生成标书时会自动引用，内容更贴合你的实际情况。'
+                : '先在左侧选择或新建一个文件夹，再上传文档。'}
+              icon="▦"
+              tone="info"
+              size="page"
+              tip={canUploadToActiveFolder ? '支持 .doc / .docx / .wps / .pdf / .md / .xls / .xlsx，也可直接把文件拖到这里。' : undefined}
             >
               {canUploadToActiveFolder && (
                 <button type="button" className="primary-action" onClick={() => void uploadDocuments()} disabled={loading}>

@@ -3,7 +3,7 @@ export type { AppDialogProps } from './AppDialog';
 export { default as AppSwitch } from './AppSwitch';
 export type { AppSwitchProps } from './AppSwitch';
 export { default as EmptyState } from './EmptyState';
-export type { EmptyStateProps } from './EmptyState';
+export type { EmptyStateProps, EmptyStateTone, EmptyStateSize } from './EmptyState';
 export { default as InlineSpinner } from './InlineSpinner';
 export { default as OptionCardList } from './OptionCardList';
 export type { OptionCardItem, OptionCardListProps } from './OptionCardList';
@@ -44,7 +44,6 @@ export { githubStarNotice, useNoticeToast } from './useNoticeToast';
 export { default as OfflineLicenseActivationDialog } from './OfflineLicenseActivationDialog';
 export { AiHttpErrorDialogProvider } from './AiHttpErrorDialogProvider';
 export { AgentQuestionDialogProvider, useAutoAnswer } from './AgentQuestionDialogProvider';
-export { DonationPromptProvider } from './DonationPromptProvider';
 export {
   DocumentParseNoticeProvider,
   isLibreOfficeRequiredMessage,
@@ -53,3 +52,4 @@ export {
   useDocumentParseNotice,
 } from './DocumentParseNoticeProvider';
 export { default as MarkdownRenderer } from './MarkdownRenderer';
+export { default as ResumeBanner } from './ResumeBanner';

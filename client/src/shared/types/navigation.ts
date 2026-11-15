@@ -7,7 +7,7 @@ export type SectionId =
   | 'credential-library'
   | 'image-knowledge-base'
   | 'resource-download'
-  | 'resources'
+  | 'assets'
   | 'bid-check'
   | 'duplicate-check'
   | 'rejection-check'

@@ -119,12 +119,52 @@ function shouldInsertSpaceAfterNumber(prefix: string): boolean {
 }
 
 /**
+ * 标题是否已自带编号前缀。
+ *
+ * 背景：AI 生成的目录有时把编号写进 title 里
+ * （「第一章 编制说明」），而 number 字段也有编号。
+ * 直接拼接会变成「第一章 第一章 编制说明」。
+ *
+ * 判断依据：
+ *   1. title 以「第X章/节/条」开头
+ *   2. title 以数字编号开头（「1.1 」「1、」）
+ *   3. title 以括号编号开头（「（一）」「(1)」）
+ */
+function titleHasOwnNumber(title: string): boolean {
+  const t = String(title || '').trim();
+  if (!t) return false;
+  return (
+    /^第[一二三四五六七八九十百千\d]+[章节条款部分]/.test(t)
+    || /^\d+(\.\d+)*[\s、.．]/.test(t)
+    || /^[（(][一二三四五六七八九十\d]+[）)]/.test(t)
+  );
+}
+
+/**
  * 将目录项 number + title 按指定编号格式拼接为完整标题文本。
+ *
+ * 幂等：title 已带编号时不重复拼接，避免出现
+ * 「第一章 第一章 编制说明」这种重复。
  */
 export function formatOutlineTitle(number: string, title: string, heading: HeadingNumberingConfig | null | undefined): string {
+  const plainTitle = String(title || '');
+
+  // title 自带编号 → 以 title 为准，不再拼 number
+  if (titleHasOwnNumber(plainTitle)) {
+    return plainTitle;
+  }
+
   const prefix = formatOutlineNumber(number, heading);
-  if (!prefix) return String(title || '');
-  return `${prefix}${shouldInsertSpaceAfterNumber(prefix) ? ' ' : ''}${title || ''}`;
+  if (!prefix) return plainTitle;
+
+  // 双重防护：若 number 本身也带编号（如「第一章」），
+  // 且 title 开头与其重复，则去重
+  const norm = (v: string) => String(v || '').replace(/\s+/g, '').trim();
+  if (norm(plainTitle).startsWith(norm(prefix))) {
+    return plainTitle;
+  }
+
+  return `${prefix}${shouldInsertSpaceAfterNumber(prefix) ? ' ' : ''}${plainTitle}`;
 }
 
 /** 排序草稿即时更新显示编号，节点 ID 和选择状态保持不变。 */

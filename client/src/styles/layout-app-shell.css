@@ -325,11 +325,32 @@
   width: min(440px, calc(100vw - 40px));
 }
 
-.group-chat-qr {
-  display: block;
-  width: min(360px, 100%);
-  height: auto;
-  margin: 0 auto;
+/* 使用说明对话框（替代原来跳外部 wiki） */
+.guide-content {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-height: min(56vh, 460px);
+  overflow-y: auto;
+}
+
+.guide-content section h4 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text-strong, #0f172a);
+}
+
+.guide-content section p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.75;
+  color: var(--text-muted, #64748b);
+}
+
+.guide-content section strong {
+  color: var(--text-strong, #334155);
+  font-weight: 600;
 }
 
 /* [434-537] main-area + agent-runtime-status-bar/dot/copy/meta + keyframes + section-kicker */

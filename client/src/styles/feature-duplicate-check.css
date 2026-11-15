@@ -930,3 +930,63 @@
   color: var(--yb-text-soft);
   line-height: 1.8;
 }
+
+/* ============================================================
+ * 查重结果：无重复时的成功卡片
+ *
+ * 「未发现重复」是一个好结果，不该用占满屏的空态表达。
+ * 收成一个紧凑卡片：结论 + 说明 + 下一步引导，
+ * 既明确又不会让页面显得没跑成功。
+ * ============================================================ */
+
+.duplicate-result-success {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 20px;
+  background: var(--yb-surface);
+  border: 1px solid var(--yb-border);
+  border-left: 3px solid var(--yb-success);
+  border-radius: var(--yb-radius-lg);
+}
+
+.duplicate-success-icon {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  background: var(--yb-success-soft);
+  color: var(--yb-success);
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.duplicate-success-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.duplicate-success-body strong {
+  display: block;
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--yb-text);
+  margin-bottom: 5px;
+}
+
+.duplicate-success-body p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--yb-text-soft);
+}
+
+.duplicate-success-hint {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--yb-border);
+  font-size: 12px;
+  color: var(--yb-text-muted);
+}

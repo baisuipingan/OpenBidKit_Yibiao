@@ -6,13 +6,12 @@ import { showUpdateReadyToast } from '../../../shared/updateToast';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
 import type { AgentSelfCheckResult, AgentSelfCheckStepStatus, AiRequestMode, ClientConfig, ComponentsConfig, FileParserProvider, ImageModelConfig, ImageModelProfiles, ImageModelProvider, ImageModelRatio, ImageModelSize, ImageModelStatus, LicenseRuntimeStatus, TextModelConfig, TextModelProfiles, TextModelProvider, UpdateChannel } from '../../../shared/types';
 import type { SettingsPageRequest, SettingsPageState, SettingsTab } from '../types';
-import ChangelogDialog from '../../changelog/components/ChangelogDialog';
-import { useChangelogUnread } from '../../changelog/hooks/useChangelogUnread';
 import OfficialAccountControls from '../components/OfficialAccountControls';
 import OfficialInvoicePanel from '../components/OfficialInvoicePanel';
 import OfficialOrdersPanel from '../components/OfficialOrdersPanel';
 import OfficialTransactionsPanel from '../components/OfficialTransactionsPanel';
 import StorageSpaceDialog from '../components/StorageSpaceDialog';
+import { isWebBridge } from '../../../shared/bridge/web';
 
 type UpdateStatus = 'idle' | 'checking' | 'downloading' | 'downloaded' | 'error' | 'disabled';
 type AgentSelfCheckUiStatus = 'untested' | 'checking' | 'normal' | 'busy' | 'error';
@@ -62,7 +61,7 @@ function getLicenseSourceLabel(status: LicenseRuntimeStatus | null) {
 }
 
 const textModelProviders: Array<{ value: TextModelProvider; label: string }> = [
-  { value: 'official', label: '易标官方API' },
+  { value: 'official', label: '标书工作台官方API' },
   { value: 'jinlong', label: '金龙中转站【推荐】' },
   { value: 'volcengine', label: '火山方舟' },
   { value: 'deepseek', label: 'DeepSeek' },
@@ -681,8 +680,6 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
   const [exportingAgentSelfCheckReport, setExportingAgentSelfCheckReport] = useState(false);
   const [agentAutoAnswerDraft, setAgentAutoAnswerDraft] = useState(false);
   const [contextLengthDialogOpen, setContextLengthDialogOpen] = useState(false);
-  const [changelogOpen, setChangelogOpen] = useState(false);
-  const { hasUnread: changelogUnread, markSeen: markChangelogSeen } = useChangelogUnread();
   const contextLengthLeaveResolverRef = useRef<((allowed: boolean) => void) | null>(null);
   const { showToast } = useToast();
   const { enabled: agentAutoAnswerEnabled } = useAutoAnswer();
@@ -1772,8 +1769,11 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
             </div>
           </div>
 
-          <div className="settings-group-title">更新与系统</div>
-          <div className="settings-list">
+          {/* 更新与系统：桌面版专属。
+              Web 版通过浏览器访问，没有自动更新和 GPU 加速的概念，
+              展示了反而让用户困惑「点了为什么没反应」。 */}
+          {!isWebBridge && <div className="settings-group-title">更新与系统</div>}
+          {!isWebBridge && <div className="settings-list">
             <label className="settings-row">
               <div className="settings-row-copy">
                 <strong>自动更新渠道</strong>
@@ -1795,14 +1795,16 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
               </div>
               <AppSwitch checked={state.general.gpu_hardware_acceleration_enabled} onCheckedChange={(checked) => updateGpuHardwareAcceleration(checked)} />
             </label>
-          </div>
+          </div>}
 
           <div className="settings-group-title">存储</div>
           <div className="settings-list">
             <div className="settings-row">
               <div className="settings-row-copy">
                 <strong>存储空间</strong>
-                <span>查看本机数据占用，清理历史遗留文件以及临时、缓存、日志等文件</span>
+                <span>{isWebBridge
+                  ? '查看服务器上的数据占用，清理临时文件、缓存和日志'
+                  : '查看本机数据占用，清理历史遗留文件以及临时、缓存、日志等文件'}</span>
               </div>
               <div className="settings-action-cell">
                 <button type="button" className="inline-action" onClick={() => setStorageDialogOpen(true)}>
@@ -1946,7 +1948,7 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
                         <ul>
                           <li>为简化操作流程，允许无账号充值（最多100元），但该模式一旦您的电脑出现故障，换设备、重装软件、清理缓存等，会导致余额无法找回，<strong>长期使用一定要绑定邮箱</strong>！</li>
                           <li>官方API特色：为保证高可用，<strong>彻底解决模型报错、标书生成一半就失败的问题</strong>。官方API采用多供应商、多模型路由的模式，故成本不确定，具体费用取决于您当时被路由到的模型服务商。</li>
-                          <li>关于计费：我们会在您被路由到的模型<strong>成本上额外增加30%</strong>，用作服务器运维、税费、利润等。易标会甄选优质服务商，并大批量采购以拿到更优惠的成本价，可以确定的是即使增加了30%，性价比优先模式下，也<strong>比DeepSeek官网的价格更低。</strong></li>
+                          <li>关于计费：我们会在您被路由到的模型<strong>成本上额外增加30%</strong>，用作服务器运维、税费、利润等。标书工作台会甄选优质服务商，并大批量采购以拿到更优惠的成本价，可以确定的是即使增加了30%，性价比优先模式下，也<strong>比DeepSeek官网的价格更低。</strong></li>
                           <li>
                             模型类型：
                             <ul>
@@ -2633,7 +2635,9 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
       {activeTab === 'about' && (
         <section className="settings-page-section about-section">
           <div className="about-overview">
-            <article className="about-update-card">
+            {/* 自动更新是桌面版能力：Web 版由部署方统一升级，
+                展示「检查更新」按钮点了也没反应，直接不显示。 */}
+            {!isWebBridge && <article className="about-update-card">
               <div className="about-card-head">
                 <span>自动更新</span>
                 <strong>当前版本 {appVersion || '...'}</strong>
@@ -2654,51 +2658,24 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
                 >
                   {updateStatus === 'downloaded' ? '安装并重启' : updateBusy ? '检查中...' : '检查更新'}
                 </button>
-                <button
-                  type="button"
-                  className="about-changelog-link"
-                  onClick={() => setChangelogOpen(true)}
-                >
-                  {changelogUnread ? <span className="about-changelog-dot" aria-hidden="true" /> : null}
-                  查看更新日志
-                </button>
               </div>
-            </article>
+            </article>}
             <article className="about-info-card about-links-card">
-              <span>信息与授权</span>
+              <span>服务信息</span>
               <ul className="about-links-list">
                 <li className="about-links-item">
-                  <span className="about-links-label">GitHub 仓库</span>
-                  <a
-                    className="about-links-value is-link"
-                    href="https://github.com/FB208/OpenBidKit_Yibiao"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    FB208/OpenBidKit_Yibiao
-                  </a>
+                  <span className="about-links-label">运行方式</span>
+                  <span className="about-links-value">Web 版（浏览器访问，数据存于服务端）</span>
                 </li>
                 <li className="about-links-item">
-                  <span className="about-links-label">使用文档</span>
-                  <a
-                    className="about-links-value is-link"
-                    href="https://wiki.agnet.top/"
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    wiki.agnet.top
-                  </a>
+                  <span className="about-links-label">数据存储</span>
+                  <span className="about-links-value">部署方自有服务器，不出本机网络</span>
                 </li>
                 <li className="about-links-item">
-                  <span className="about-links-label">客户端授权状态</span>
-                  <span className={`about-links-value ${licenseStatus?.sourceTrusted ? 'is-trusted' : 'is-untrusted'}`}>
-                    {licenseSourceLabel}
-                  </span>
+                  <span className="about-links-label">登录方式</span>
+                  <span className="about-links-value">账号密码（由管理员分配）</span>
                 </li>
               </ul>
-              <button type="button" className="about-links-activate" onClick={() => setOfflineLicenseDialogOpen(true)}>
-                离线激活授权
-              </button>
             </article>
           </div>
           <div className="privacy-statement">
@@ -2748,11 +2725,6 @@ function SettingsPage({ onDeveloperModeChange, request, onRequestHandled, regist
         open={offlineLicenseDialogOpen}
         onOpenChange={setOfflineLicenseDialogOpen}
         onActivated={setLicenseStatus}
-      />
-      <ChangelogDialog
-        open={changelogOpen}
-        onOpenChange={setChangelogOpen}
-        onLoaded={markChangelogSeen}
       />
       {storageDialogOpen && <StorageSpaceDialog onClose={() => setStorageDialogOpen(false)} />}
       <FloatingToolbar groups={settingsToolbarGroups} label="设置保存工具条" />

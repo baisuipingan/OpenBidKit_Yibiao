@@ -280,3 +280,14 @@ logs/
 
 # 企业微信群聊导出工具本地环境和敏感产物
 scripts/wecom_chat_export/
+
+# Web 版迁移临时产物
+client/.yb-layout-entry/
+client/index.html.bak
+
+# IDE 配置（本地环境相关，不应入库）
+.openidea/
+.idea/
+
+# WorkBuddy 本地工作记忆（含服务器地址等私有信息，绝不入库）
+.workbuddy/

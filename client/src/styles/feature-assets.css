@@ -1,0 +1,754 @@
+/* 产物库页面（Web 版独有） */
+
+.assets-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px 28px;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.assets-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.assets-header h1 {
+  margin: 0 0 6px;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--yb-text);
+}
+
+.assets-subtitle {
+  margin: 0;
+  font-size: 13px;
+  color: var(--yb-text-soft);
+}
+
+/* 统计卡片 */
+
+.assets-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.assets-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 18px;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-md);
+  background: var(--yb-surface);
+  box-shadow: var(--yb-shadow-xs);
+}
+
+.assets-stat-value {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--yb-text);
+  line-height: 1.2;
+}
+
+.assets-stat-label {
+  font-size: 12px;
+  color: var(--yb-text-muted);
+}
+
+/* 工具栏 */
+
+.assets-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.assets-filters {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.assets-filter {
+  padding: 6px 14px;
+  border: 1px solid var(--yb-border);
+  border-radius: var(--yb-radius-pill);
+  background: var(--yb-surface);
+  color: var(--yb-text-soft);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.assets-filter:hover {
+  border-color: var(--yb-primary);
+  color: var(--yb-primary);
+}
+
+/* 选中态用主色填充 + 白字，必须显式写 color，否则会和背景同色看不见 */
+.assets-filter.is-active {
+  background: var(--yb-primary);
+  border-color: var(--yb-primary);
+  color: #fff;
+}
+
+.assets-filter.is-active:hover {
+  background: var(--yb-primary-hover);
+  border-color: var(--yb-primary-hover);
+  color: #fff;
+}
+
+.assets-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.assets-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--yb-text-soft);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.assets-checkbox input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--yb-primary);
+  cursor: pointer;
+}
+
+.assets-search {
+  min-width: 200px;
+  padding: 7px 14px;
+  border: 1px solid var(--yb-border);
+  border-radius: var(--yb-radius-pill);
+  background: var(--yb-surface);
+  color: var(--yb-text);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.assets-search:focus {
+  border-color: var(--yb-primary);
+}
+
+.assets-search::placeholder {
+  color: var(--yb-text-muted);
+}
+
+/* 列表 */
+
+.assets-loading {
+  padding: 48px 0;
+  text-align: center;
+  color: var(--yb-text-muted);
+  font-size: 14px;
+}
+
+.assets-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.assets-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-sm);
+  background: var(--yb-surface);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.assets-item:hover {
+  border-color: var(--yb-border);
+  box-shadow: var(--yb-shadow-xs);
+}
+
+.assets-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--yb-radius-sm);
+  background: rgba(33, 116, 253, 0.08);
+  color: var(--yb-primary);
+  flex-shrink: 0;
+}
+
+.assets-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.assets-name {
+  font-size: 14px;
+  color: var(--yb-text);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assets-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--yb-text-muted);
+}
+
+.assets-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* 图片预览遮罩 */
+
+.assets-preview-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  background: rgba(12, 18, 34, 0.66);
+  backdrop-filter: blur(4px);
+  cursor: zoom-out;
+}
+
+.assets-preview-image {
+  max-width: 92vw;
+  max-height: 88vh;
+  border-radius: var(--yb-radius-sm);
+  background: #fff;
+  box-shadow: var(--yb-shadow-lg);
+}
+
+@media (max-width: 900px) {
+  .assets-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .assets-page {
+    padding: 16px;
+  }
+
+  .assets-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .assets-toolbar-right {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .assets-search {
+    width: 100%;
+  }
+}
+
+/* ===== 项目切换器（侧边栏顶部）===== */
+
+.project-switcher {
+  padding: 0 12px 10px;
+}
+
+.project-switcher-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--yb-border);
+  border-radius: var(--yb-radius-sm);
+  background: var(--yb-surface);
+  color: var(--yb-text);
+  font-size: 12.5px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.project-switcher-trigger:hover {
+  border-color: var(--yb-primary);
+  background: var(--yb-primary-soft, rgba(33, 116, 253, 0.06));
+}
+
+.project-switcher-icon {
+  display: inline-flex;
+  color: var(--yb-primary);
+  flex-shrink: 0;
+}
+
+.project-switcher-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.project-switcher-caret {
+  display: inline-flex;
+  color: var(--yb-text-muted);
+  flex-shrink: 0;
+}
+
+/* 项目切换弹窗 */
+
+.project-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgba(12, 18, 34, 0.5);
+  backdrop-filter: blur(2px);
+}
+
+.project-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 71;
+  transform: translate(-50%, -50%);
+  width: min(600px, 92vw);
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+  padding: 22px 24px 18px;
+  border-radius: var(--yb-radius-lg);
+  background: var(--yb-surface);
+  box-shadow: var(--yb-shadow-lg);
+}
+
+.project-dialog-title {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--yb-text);
+}
+
+.project-dialog-desc {
+  margin: 0 0 16px;
+  font-size: 12.5px;
+  color: var(--yb-text-muted);
+}
+
+.project-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.project-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-sm);
+  transition: border-color 0.15s ease;
+}
+
+.project-item:hover {
+  border-color: var(--yb-border);
+}
+
+.project-item.is-current {
+  border-color: var(--yb-primary);
+  background: rgba(33, 116, 253, 0.04);
+}
+
+.project-item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.project-item-main:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.project-item-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--yb-text);
+}
+
+.project-item-badge {
+  padding: 1px 6px;
+  border-radius: var(--yb-radius-pill);
+  background: var(--yb-primary);
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 500;
+}
+
+.project-item-running {
+  padding: 1px 6px;
+  border-radius: var(--yb-radius-pill);
+  background: var(--yb-success-soft);
+  border: 1px solid var(--yb-success-border);
+  color: var(--yb-success);
+  font-size: 10.5px;
+  font-weight: 500;
+}
+
+.project-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--yb-text-muted);
+  flex-wrap: wrap;
+}
+
+.project-item-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.project-item-action {
+  padding: 3px 8px;
+  border: 1px solid var(--yb-border);
+  border-radius: var(--yb-radius-sm);
+  background: var(--yb-surface);
+  color: var(--yb-text-soft);
+  font-size: 11.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.project-item-action:hover {
+  border-color: var(--yb-primary);
+  color: var(--yb-primary);
+}
+
+.project-item-action.is-danger:hover {
+  border-color: var(--yb-danger);
+  color: var(--yb-danger);
+}
+
+.project-rename-input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--yb-primary);
+  border-radius: var(--yb-radius-sm);
+  background: var(--yb-surface);
+  color: var(--yb-text);
+  font-size: 13.5px;
+  font-family: inherit;
+  outline: none;
+}
+
+.project-dialog-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.project-dialog-hint {
+  margin: 0 0 12px;
+  padding: 9px 12px;
+  border-radius: var(--yb-radius-sm);
+  background: var(--yb-bg);
+  color: var(--yb-text-soft);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* ===== 任务恢复提示条 ===== */
+
+.resume-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  border: 1px solid var(--yb-warning-border);
+  border-radius: var(--yb-radius-md);
+  background: var(--yb-warning-soft);
+}
+
+.resume-banner-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--yb-warning);
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.resume-banner-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.resume-banner-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--yb-warning-deep);
+  margin-bottom: 6px;
+}
+
+.resume-banner-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.resume-banner-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.resume-banner-text {
+  font-size: 12.5px;
+  color: var(--yb-warning-deep);
+  opacity: 0.9;
+}
+
+.resume-banner-text b {
+  font-weight: 600;
+}
+
+.resume-banner-dot {
+  margin: 0 5px;
+  opacity: 0.5;
+}
+
+.resume-banner-action {
+  padding: 4px 12px;
+  border: 1px solid var(--yb-warning);
+  border-radius: var(--yb-radius-pill);
+  background: #fff;
+  color: var(--yb-warning-deep);
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.resume-banner-action:hover:not(:disabled) {
+  background: var(--yb-warning);
+  color: #fff;
+}
+
+.resume-banner-action:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.resume-banner-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: var(--yb-radius-sm);
+  background: transparent;
+  color: var(--yb-warning-deep);
+  opacity: 0.6;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity 0.15s ease;
+}
+
+.resume-banner-close:hover {
+  opacity: 1;
+}
+
+/* ============================================================
+ * 知识库：顶部统计卡
+ *
+ * 目的：知识库只有一两条文档时，整页会显得空荡。
+ * 加一行统计让用户先看到「我的知识库有多少东西」，
+ * 数据密度上来了，空感就消失了。
+ * ============================================================ */
+
+.knowledge-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.knowledge-stat {
+  padding: 14px 16px;
+  background: var(--yb-surface);
+  border: 1px solid var(--yb-border);
+  border-radius: var(--yb-radius-lg);
+}
+
+.knowledge-stat strong {
+  display: block;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  color: var(--yb-text);
+}
+
+.knowledge-stat span {
+  display: block;
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--yb-text-muted);
+}
+
+@media (max-width: 1100px) {
+  .knowledge-stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* ============================================================
+ * 知识库：文档列表下方的引导卡
+ *
+ * 文档只有一两条时，右栏下方会留大片空白。
+ * 引导卡填在这里：既消除空荡感，又给出明确的下一步动作。
+ * ============================================================ */
+
+.knowledge-upload-hint {
+  margin-top: 16px;
+  padding: 32px 24px;
+  text-align: center;
+  border: 1px dashed var(--yb-border);
+  border-radius: var(--yb-radius-lg);
+  background: #fcfdff;
+}
+
+.knowledge-upload-hint-icon {
+  width: 44px;
+  height: 44px;
+  margin: 0 auto 14px;
+  border-radius: 12px;
+  background: var(--yb-primary-soft);
+  color: var(--yb-primary);
+  display: grid;
+  place-items: center;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.knowledge-upload-hint strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--yb-text);
+  margin-bottom: 6px;
+}
+
+.knowledge-upload-hint p {
+  margin: 0 auto 16px;
+  max-width: 420px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--yb-text-muted);
+}
+
+/* ============================================================
+ * 产物库：行操作图标按钮
+ *
+ * 原来每行一个 88px 主色「下载」按钮，一屏八九个蓝块，
+ * 视觉重量压过了文件名本身。改成图标按钮：
+ * 平时只有一个 30px 方块，鼠标悬停整行时才加深。
+ * ============================================================ */
+
+.assets-icon-btn {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--yb-border);
+  border-radius: 7px;
+  background: var(--yb-surface);
+  color: var(--yb-text-soft);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.assets-icon-btn:hover:not(:disabled) {
+  border-color: var(--yb-primary);
+  color: var(--yb-primary);
+  background: var(--yb-primary-soft);
+}
+
+.assets-icon-btn.is-primary:hover:not(:disabled) {
+  border-color: var(--yb-primary);
+  background: var(--yb-primary);
+  color: #fff;
+}
+
+.assets-icon-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}

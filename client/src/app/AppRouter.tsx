@@ -13,7 +13,7 @@ import CredentialLibraryPage from '../features/credential-library/pages/Credenti
 import KnowledgeBasePage from '../features/knowledge-base/pages/KnowledgeBasePage';
 import RejectionCheckPage from '../features/rejection-check/pages/RejectionCheckPage';
 import BlindCheckPage from '../features/blind-check/pages/BlindCheckPage';
-import ResourcesPage from '../features/resources/pages/ResourcesPage';
+import AssetsPage from '../features/assets/pages/AssetsPage';
 import PluginsPage from '../features/plugins/pages/PluginsPage';
 import DualLayerPdfPage from '../features/dual-layer-pdf/pages/DualLayerPdfPage';
 import SettingsPage from '../features/settings/pages/SettingsPage';
@@ -51,8 +51,8 @@ function AppRouter({ activeSection, developerMode, onDeveloperModeChange, onSect
       return <KnowledgeBasePage />;
     case 'credential-library':
       return <CredentialLibraryPage developerMode={developerMode} />;
-    case 'resources':
-      return <ResourcesPage />;
+    case 'assets':
+      return <AssetsPage />;
     case 'plugin-manager':
       return <PluginsPage />;
     case 'dual-layer-pdf':

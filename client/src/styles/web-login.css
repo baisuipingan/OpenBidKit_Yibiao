@@ -1,0 +1,163 @@
+/*
+ * Web 版登录页样式。
+ *
+ * 只在 Web 模式使用，桌面版不会加载这些类。
+ * 颜色、圆角、阴影全部复用 tokens.css 的 --yb-* 变量，
+ * 视觉与业务页面保持一致。
+ */
+
+.yb-login-page {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 18% 12%, rgba(33, 116, 253, 0.08), transparent 46%),
+    radial-gradient(circle at 82% 88%, rgba(33, 116, 253, 0.06), transparent 42%),
+    var(--yb-bg);
+}
+
+.yb-login-card {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  width: 100%;
+  max-width: 400px;
+  padding: 36px 32px 32px;
+  border: 1px solid var(--yb-border-soft);
+  border-radius: var(--yb-radius-xl);
+  background: var(--yb-surface);
+  box-shadow: var(--yb-shadow-lg);
+}
+
+.yb-login-brand {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+/* 品牌标识：单字标。
+   原来是 5 个字「标书工作台」塞进 48px 方块，
+   会被压成两行且溢出，看起来像渲染错误。 */
+.yb-login-mark {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  border-radius: var(--yb-radius-md);
+  background: linear-gradient(140deg, var(--yb-primary), var(--yb-primary-deep));
+  color: #fff;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1;
+  /* 字标用微阴影增加立体感，避免纯色块显得单薄 */
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+.yb-login-brand h1 {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+  color: var(--yb-text);
+}
+
+.yb-login-brand p {
+  margin: 3px 0 0;
+  font-size: 13px;
+  color: var(--yb-text-soft);
+}
+
+.yb-login-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.yb-login-field > span {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--yb-text-soft);
+}
+
+.yb-login-field > input {
+  width: 100%;
+  padding: 11px 14px;
+  border: 1px solid var(--yb-border);
+  border-radius: var(--yb-radius-sm);
+  background: var(--yb-surface);
+  color: var(--yb-text);
+  font-size: 14px;
+  font-family: inherit;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.yb-login-field > input:focus {
+  outline: none;
+  border-color: var(--yb-primary);
+  box-shadow: 0 0 0 3px rgba(33, 116, 253, 0.12);
+}
+
+.yb-login-field > input::placeholder {
+  color: var(--yb-text-muted);
+}
+
+.yb-login-link {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--yb-primary);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.yb-login-link:hover {
+  color: var(--yb-primary-hover);
+  text-decoration: underline;
+}
+
+.yb-login-error {
+  padding: 10px 14px;
+  border: 1px solid rgba(220, 38, 38, 0.22);
+  border-radius: var(--yb-radius-sm);
+  background: rgba(220, 38, 38, 0.06);
+  color: #b91c1c;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.yb-login-submit {
+  margin-top: 6px;
+  padding: 12px 20px;
+  border: none;
+  border-radius: var(--yb-radius-sm);
+  background: var(--yb-primary);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+}
+
+.yb-login-submit:hover:not(:disabled) {
+  background: var(--yb-primary-hover);
+}
+
+.yb-login-submit:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.yb-login-submit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.yb-login-loading {
+  font-size: 14px;
+  color: var(--yb-text-soft);
+}

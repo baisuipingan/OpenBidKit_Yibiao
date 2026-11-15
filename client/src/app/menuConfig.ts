@@ -1,5 +1,5 @@
 import type { AppMenuItem, SectionId } from '../shared/types/navigation';
-import { githubStarNotice } from '../shared/ui/useNoticeToast';
+import { webUnavailableNotice } from '../shared/ui/useNoticeToast';
 
 export const appMenuItems: AppMenuItem[] = [
   {
@@ -49,7 +49,7 @@ export const appMenuItems: AppMenuItem[] = [
         label: '图片知识库',
         description: '管理图片素材、图示和视觉参考资料',
         icon: 'file',
-        notice: githubStarNotice,
+        notice: webUnavailableNotice,
       },
     ],
   },
@@ -81,7 +81,7 @@ export const appMenuItems: AppMenuItem[] = [
         label: 'AI评标',
         description: '模拟AI评标，对标书进行打分，出具评标报告',
         icon: 'tool',
-        notice: githubStarNotice,
+        notice: webUnavailableNotice,
       },
     ],
   },
@@ -95,18 +95,22 @@ export const appMenuItems: AppMenuItem[] = [
         label: 'Word批量转换（双层PDF、图片）',
         description: '把 Word 批量转换成双层 PDF 或逐页图片',
         icon: 'export',
+        // 需要本机 Office/Ghostscript 做 PDF 转换，浏览器做不到
+        notice: webUnavailableNotice,
       },
       {
         id: 'plugin-manager',
         label: '插件管理',
         description: '安装和管理插件，扩展软件功能',
         icon: 'code',
+        // 插件是本地可执行扩展，网页版无法加载
+        notice: webUnavailableNotice,
       },
       {
-        id: 'resources',
-        label: '精选资源',
-        description: '投标相关资料、工具下载',
-        icon: 'export',
+        id: 'assets',
+        label: '产物库',
+        description: '生成的 Word 文档、配图和其他产物',
+        icon: 'document',
       },
     ],
   },

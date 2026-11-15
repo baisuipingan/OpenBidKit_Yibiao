@@ -89,20 +89,44 @@ const outlineExpansionModeOptions: Array<{ value: OutlineExpansionMode; title: s
 const globalFactsModeOptions: Array<{ value: GlobalFactsMode; title: string; description: string }> = [
   {
     value: 'fabricate',
-    title: '胡咧咧模式',
-    description: '未在参考材料中找到的直接证据，但经评估，正文中可能用到，为保证全文一致，会由 AI 直接杜撰。如：涉及人员名单，但用户未提供，AI 会编辑不存在的人名。此模式写完的技术方案直接完整可用，无需人工干预。',
+    title: 'AI 补全（自动填充）',
+    description: '参考材料中没有的具体信息，由 AI 自动生成以保证全文完整可用。注意：可能生成不存在的人名、业绩或型号，投标前必须逐项核对。适用于内部讨论稿，不建议直接用于正式投标。',
   },
   {
     value: 'omit',
-    title: '别招欠模式',
-    description: '选题范围与胡咧咧模式相同。未在参考材料中找到具体值时，仍会保留该项，改写成符合招标要求的笼统口径，不写具体人员、时间、地点、业绩、证书、规格型号或实施细节。如：涉及人员名单但用户未提供，会保留岗位事实并写成按招标要求配备，而不是编造人名或忽略该项。正文阶段同样沿用笼统写法。',
+    title: '笼统表述（推荐）',
+    description: '保留该章节但改写成符合招标要求的概括性表述，不写具体人员、时间、地点、业绩、证书和型号。例如人员名单缺失时，写成「按招标要求配备」而不是编造人名。不会出现虚假信息，正文阶段沿用同样写法。',
   },
   {
     value: 'placeholder',
-    title: '放着我来模式',
-    description: '选题范围与胡咧咧模式相同。未在参考材料中找到具体值时，仍会保留该项，并将值标记为【待填写】。如：涉及人员名单但用户未提供，会保留岗位事实并写成【待填写】。用户需要二次修改后再进入正文生成阶段。正文生产时的任何不确定项也会使用【待填写】占位。',
+    title: '标记待填写',
+    description: '保留该章节，把缺失的具体值标成【待填写】，由你后续手工补齐。适用于必须写真实数据、且你手头有准确资料的场景。正文生成时的任何不确定项同样使用【待填写】占位。',
   },
 ];
+/**
+ * 各生成范围的影响说明。
+ *
+ * 用于「当前选择的影响」卡片，把抽象的选项名翻译成
+ * 具体的后果（目录怎么长、多少章、什么场景用）。
+ */
+const outlineModeImpacts: Record<OutlineMode, { description: string; sectionHint: string; scenario: string }> = {
+  'response-file': {
+    description: '按招标文件「投标文件组成」逐条响应，涵盖商务、技术、资格全部要求',
+    sectionHint: '通常 12-18 章，与招标文件要求一一对应',
+    scenario: '招标文件明确要求技术标包含商务内容的项目',
+  },
+  'standalone-technical': {
+    description: '只生成技术标，从技术评分项的大项开始组织目录',
+    sectionHint: '通常 8-12 章，聚焦施工方案与技术措施',
+    scenario: '商务标与技术标分开装订、分别评审的项目',
+  },
+  'standalone-business': {
+    description: '只生成商务标部分，按商务评分要求组织目录',
+    sectionHint: '通常 5-8 章，聚焦报价、资质与商务条款响应',
+    scenario: '商务标独立成册、单独评审的项目',
+  },
+};
+
 // 页签第二行只放短名，避免挤占页签宽度。
 const outlineModeSummaryLabels: Record<OutlineMode, string> = {
   'response-file': '完整标',
@@ -110,9 +134,9 @@ const outlineModeSummaryLabels: Record<OutlineMode, string> = {
   'standalone-business': '商务标',
 };
 const globalFactsModeSummaryLabels: Record<GlobalFactsMode, string> = {
-  fabricate: '胡咧咧',
-  omit: '别招欠',
-  placeholder: '放着我来',
+  fabricate: 'AI 补全',
+  omit: '笼统表述',
+  placeholder: '待填写',
 };
 const tableRequirementOptions: Array<{ value: ContentTableRequirement; label: string }> = [
   { value: 'none', label: '不要' },
@@ -313,6 +337,28 @@ function GenerationSettingsPage({
   const enabledImageLayoutCount = IMAGE_LAYOUTS.filter(({ key }) => imageLayoutShares[key] > 0).length;
   const selectedExportTemplate = exportTemplates.find((template) => template.template_id === exportTemplateId) || null;
   // 页签第二行“功能词·当前值”只读取已保存配置，输入中的草稿不提前展示。
+  /**
+   * 每个页签是否已配置。
+   *
+   * 判断依据是「用户是否动过这一项」，不是摘要是否有值
+   * （摘要永远有值，如「原方案·未上传」也算有内容）。
+   *
+   * 用这个驱动左侧导航的绿点，让用户扫一眼就知道哪几项还没设。
+   */
+  const tabConfigured: Record<GenerationSettingsTab, boolean> = {
+    content: true, // 生成范围永远有默认值，视为已配置
+    'existing-plan': Boolean(originalPlanFile),
+    knowledge: referenceKnowledgeDocumentIds.length > 0,
+    length: Boolean(outlineWordControlOptions),
+    illustration: currentContentGenerationOptions.imageQuantity > 0,
+    writing: Boolean(globalFactsMode),
+    appearance: Boolean(exportTemplateId),
+  };
+
+  const configuredTabCount = tabs.filter((tab) => tabConfigured[tab.id]).length;
+
+  const outlineModeImpact = outlineModeImpacts[outlineMode];
+
   const tabSummaries: Record<GenerationSettingsTab, string> = {
     content: `范围·${outlineModeSummaryLabels[outlineMode]}`,
     'existing-plan': `原方案·${originalPlanFile ? '已上传' : '未上传'}`,
@@ -805,29 +851,38 @@ function GenerationSettingsPage({
           </div>
         </header>
 
-        <div className="document-switch-tabs generation-settings-tabs" role="tablist" aria-label="生成设置分类">
+        <div className="generation-settings-layout">
+        <nav className="generation-settings-rail" role="tablist" aria-label="生成设置分类" aria-orientation="vertical">
           {tabs.map((tab, index) => {
             const active = tab.id === activeTab;
             return (
               <button
                 type="button"
-                className={`document-switch-tab generation-settings-tab${active ? ' is-active' : ''}`}
+                className={`generation-settings-rail-item${active ? ' is-active' : ''}${tabConfigured[tab.id] ? ' is-configured' : ''}`}
                 id={`generation-settings-tab-${tab.id}`}
                 aria-selected={active}
                 aria-controls="generation-settings-panel"
                 role="tab"
                 tabIndex={active ? 0 : -1}
                 key={tab.id}
-                title={`${tab.label}：${tabSummaries[tab.id]}`}
+                title={`${tab.label}\n${tab.description}\n当前：${tabSummaries[tab.id]}`}
                 onClick={() => onActiveTabChange(tab.id)}
                 onKeyDown={(event) => handleTabKeyDown(event, index)}
               >
-                <span className="generation-settings-tab-label">{tab.label}</span>
-                <small className="generation-settings-tab-summary">{tabSummaries[tab.id]}</small>
+                <span className="rail-item-label">{tab.label}</span>
+                <small className="rail-item-summary">{tabSummaries[tab.id] || '未配置'}</small>
               </button>
             );
           })}
-        </div>
+
+          {/* 完成度：7 项里配了几项，让用户知道还剩多少 */}
+          <div className="generation-settings-rail-progress">
+            <strong>{configuredTabCount} / {tabs.length} 已配置</strong>
+            <div className="rail-progress-bar">
+              <span style={{ width: `${(configuredTabCount / tabs.length) * 100}%` }} />
+            </div>
+          </div>
+        </nav>
 
         <fieldset
           disabled={generationConfigLocked && activeTab !== 'appearance'}
@@ -863,6 +918,29 @@ function GenerationSettingsPage({
                   : outlineModeRequiresRegeneration
                     ? '生成范围已改变，当前目录和正文仍保留原结果，重新生成目录后生效。'
                     : ''}
+              </div>
+
+              {/* 当前选择的影响说明：让用户理解这个选项会改变什么，
+                  而不是凭名字猜。也填补右侧面板的空白。 */}
+              <div className="generation-settings-impact">
+                <div className="impact-head">
+                  <strong>当前选择的影响</strong>
+                  <span className="impact-badge">{outlineModeSummaryLabels[outlineMode]}</span>
+                </div>
+                <ul className="impact-list">
+                  <li>
+                    <span className="impact-key">目录结构</span>
+                    <span className="impact-value">{outlineModeImpact.description}</span>
+                  </li>
+                  <li>
+                    <span className="impact-key">章节数量</span>
+                    <span className="impact-value">{outlineModeImpact.sectionHint}</span>
+                  </li>
+                  <li>
+                    <span className="impact-key">适用场景</span>
+                    <span className="impact-value">{outlineModeImpact.scenario}</span>
+                  </li>
+                </ul>
               </div>
             </fieldset>
           ) : activeTab === 'existing-plan' ? (
@@ -1238,6 +1316,7 @@ function GenerationSettingsPage({
             </div>
           )}
         </fieldset>
+        </div>
       </section>
 
       <Dialog.Root open={htmlImageTypesDialogOpen} onOpenChange={(open) => !contentOptionsBusy && setHtmlImageTypesDialogOpen(open)}>

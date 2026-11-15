@@ -2,6 +2,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
 import AppProviders from './app/providers/AppProviders';
+import AuthGate from './app/web/AuthGate';
 import WorkspaceDatabaseGate from './app/WorkspaceDatabaseGate';
 import DeveloperTokenStatsWindow from './features/developer/pages/DeveloperTokenStatsWindow';
 import PiAgentMonitorWindow from './features/developer/pages/PiAgentMonitorWindow';
@@ -21,9 +22,12 @@ if (windowMode === 'dual-layer-pdf-worker') {
         <PiAgentMonitorWindow />
       ) : (
         <AppProviders>
-          <WorkspaceDatabaseGate>
-            <App />
-          </WorkspaceDatabaseGate>
+          {/* AuthGate 在桌面版直接透传；Web 版无令牌时显示登录页 */}
+          <AuthGate>
+            <WorkspaceDatabaseGate>
+              <App />
+            </WorkspaceDatabaseGate>
+          </AuthGate>
         </AppProviders>
       )}
     </React.StrictMode>

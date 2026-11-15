@@ -1,0 +1,189 @@
+/* ============================================================
+ * 流程步骤条：多步流程的全局进度指示
+ *
+ * 设计取舍：
+ *   步骤条吸顶（sticky），因为长流程里用户随时需要知道自己在哪。
+ *   连接线用伪元素画在圆点之间，避免额外的 DOM 节点。
+ * ============================================================ */
+
+.process-stepbar {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  padding: 14px 24px 12px;
+  background: var(--yb-surface);
+  border-bottom: 1px solid var(--yb-border);
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex-shrink: 0;
+}
+
+.process-stepbar::-webkit-scrollbar {
+  display: none;
+}
+
+.process-step {
+  flex: 1;
+  min-width: 92px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  padding-bottom: 2px;
+}
+
+/* 连接线：从当前圆点右侧连到下一个圆点左侧 */
+.process-step:not(.is-last)::after {
+  content: '';
+  position: absolute;
+  top: 12px;
+  left: calc(50% + 17px);
+  right: calc(-50% + 17px);
+  height: 2px;
+  background: var(--yb-border);
+  border-radius: 1px;
+  transition: background 0.2s ease;
+}
+
+.process-step.is-done:not(.is-last)::after {
+  background: var(--yb-success);
+}
+
+.process-step-dot {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 11.5px;
+  font-weight: 650;
+  line-height: 1;
+  border: 2px solid var(--yb-border);
+  background: var(--yb-surface);
+  color: var(--yb-text-muted);
+  position: relative;
+  z-index: 1;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.process-step.is-done .process-step-dot {
+  background: var(--yb-success);
+  border-color: var(--yb-success);
+  color: #fff;
+}
+
+.process-step.is-active .process-step-dot {
+  background: var(--yb-primary);
+  border-color: var(--yb-primary);
+  color: #fff;
+  /* 光晕：让当前步骤在一排圆点里最醒目 */
+  box-shadow: 0 0 0 4px rgba(33, 116, 253, 0.14);
+}
+
+.process-step.is-error .process-step-dot {
+  background: var(--yb-danger);
+  border-color: var(--yb-danger);
+  color: #fff;
+}
+
+.process-step-label {
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--yb-text-soft);
+  white-space: nowrap;
+  transition: color 0.15s ease;
+}
+
+.process-step.is-active .process-step-label {
+  color: var(--yb-primary);
+  font-weight: 650;
+}
+
+.process-step.is-done .process-step-label {
+  color: var(--yb-text);
+}
+
+.process-step-meta {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--yb-text-muted);
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.process-step-meta.is-error {
+  color: var(--yb-danger);
+}
+
+/* 可回跳的步骤给个手型 + hover 反馈 */
+.process-step.is-clickable {
+  cursor: pointer;
+}
+
+.process-step.is-clickable:hover .process-step-label {
+  color: var(--yb-primary);
+}
+
+.process-step.is-clickable:hover .process-step-dot {
+  transform: scale(1.08);
+  box-shadow: 0 0 0 4px rgba(22, 138, 74, 0.16);
+}
+
+.process-step.is-clickable:active .process-step-dot {
+  transform: scale(0.96);
+}
+
+/* 窄屏时步骤条横向滚动，不换行 */
+@media (max-width: 1200px) {
+  .process-stepbar {
+    padding-inline: 16px;
+  }
+
+  .process-step {
+    min-width: 84px;
+  }
+
+  .process-step-meta {
+    font-size: 10.5px;
+  }
+}
+
+/* ============================================================
+ * 与技术方案页面容器的配合
+ *
+ * .content-shell 有 padding: 36px 44px，.page-stack 是 flex 纵向容器。
+ * flex 子元素的负 margin 在部分浏览器下不生效，所以用
+ * 「撑出容器 + sticky」的组合：让步骤条自己覆盖那部分 padding。
+ * ============================================================ */
+
+/* content-shell 自身滚动，步骤条才能吸顶 */
+.content-shell:has(.technical-workbench) {
+  overflow: auto;
+  padding-top: 0;
+}
+
+.technical-workbench {
+  gap: 26px;
+}
+
+.technical-workbench > .process-stepbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  /* 左右撑满 content-shell 的 44px padding */
+  margin-inline: -44px;
+  padding-inline: 44px;
+  border-radius: 0;
+  box-shadow: 0 1px 0 var(--yb-border);
+  /* 抵消 page-stack 的 gap，让下方内容紧贴 */
+  margin-bottom: -26px;
+}
+
+/* 步骤条之后的第一个块补回间距 */
+.technical-workbench > .process-stepbar + * {
+  margin-top: 26px;
+}

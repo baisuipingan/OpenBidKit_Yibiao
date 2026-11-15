@@ -1,5 +1,5 @@
 import * as Toast from '@radix-ui/react-toast';
-import { createContext, useCallback, useContext, useMemo, useReducer, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useMemo, useReducer, useRef, type ReactNode } from 'react';
 
 export type ToastType = 'success' | 'error' | 'info';
 
@@ -11,6 +11,14 @@ export interface ToastAction {
 }
 
 export interface ToastOptions {
+  /**
+   * 是否参与去重（默认 true）。
+   *
+   * 相同文案 + 类型在 3 秒内只显示一次，避免同一错误被
+   * 局部 catch 和全局兜底各弹一遍。
+   * 设为 false 时强制显示（如用户手动重试的场景）。
+   */
+  dedupe?: boolean;
   title?: string;
   duration?: number;
   persistent?: boolean;
@@ -74,11 +82,42 @@ function toastReducer(state: ToastState, action: ToastStateAction): ToastState {
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [{ items: toasts, sessionId }, dispatch] = useReducer(toastReducer, initialToastState);
 
+  /**
+   * 去重记录：文案+类型 → 上次显示时间。
+   *
+   * 背景：同一个错误常常被两处代码各弹一次（局部 catch + 全局兜底），
+   * 用户看到两个一模一样的提示，既噪音大又像是重复报了两次错。
+   *
+   * 策略：同样的文案+类型，在窗口期内只显示一次。
+   * 窗口取 3 秒 —— 同一操作产生的重复提示通常前后差几百毫秒，
+   * 而用户 3 秒后主动再触发同一操作时应该正常提示。
+   */
+  const recentToastsRef = useRef<Map<string, number>>(new Map());
+
   const dismissToast = useCallback((id: number) => {
     dispatch({ type: 'dismiss', id });
   }, []);
 
   const showToast = useCallback((message: string, type: ToastType = 'info', options: ToastOptions = {}) => {
+    // 去重：相同文案+类型在 3 秒内只显示一次。
+    // options.dedupe === false 可强制显示（如用户手动重试）。
+    if (options.dedupe !== false) {
+      const key = `${type}::${options.title || ''}::${message}`;
+      const now = Date.now();
+      const last = recentToastsRef.current.get(key);
+      if (last && now - last < 3000) {
+        return -1; // 已显示过，跳过
+      }
+      recentToastsRef.current.set(key, now);
+
+      // 顺手清理过期记录，避免 Map 无限增长
+      if (recentToastsRef.current.size > 40) {
+        for (const [k, ts] of recentToastsRef.current) {
+          if (now - ts > 10000) recentToastsRef.current.delete(k);
+        }
+      }
+    }
+
     const id = ++toastId;
     dispatch({
       type: 'add',

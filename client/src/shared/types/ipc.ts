@@ -712,7 +712,7 @@ export interface YibiaoBridge {
     requestJson: <TResult = unknown>(request: JsonCompletionRequest) => Promise<TResult>;
     testImageModel: (config: ClientConfig) => Promise<ImageModelTestResult>;
     onHttpError: (callback: (event: AiHttpErrorPayload) => void) => () => void;
-    /** 易标官方 API 返回余额不足时触发，由主窗口统一跳转充值。 */
+    /** 标书工作台官方 API 返回余额不足时触发，由主窗口统一跳转充值。 */
     onBalanceInsufficient: (callback: () => void) => () => void;
   };
   autoConfirmation: {
@@ -903,6 +903,22 @@ export interface YibiaoBridge {
     renderPreview: (html: string, config: ExportFormatConfig) => Promise<{ key: string; bytes: Uint8Array; roles: string[] }>;
   };
   tasks: {
+    /** 列出可恢复的正文生成任务（Web 版增强）。 */
+    listResumable: () => Promise<{ items: ResumableTask[]; count: number }>;
+    /** 从中断处继续生成正文（Web 版增强）。 */
+    resumeContentGeneration: (request: {
+      taskId: string;
+      targetWordsPerSection?: number;
+      totalWords?: number;
+      disableImages?: boolean;
+    }) => Promise<{
+      taskId: string;
+      resumed: boolean;
+      completedCount: number;
+      pendingCount: number;
+      status: string;
+      message?: string;
+    }>;
     startBidSectionExtraction: (payload?: unknown) => Promise<unknown>;
     startBidAnalysis: (payload: unknown) => Promise<unknown>;
     startOutlineGeneration: (payload: unknown) => Promise<unknown>;
@@ -961,6 +977,33 @@ export interface YibiaoBridge {
     uninstall: (dependencyId: string) => Promise<DependencyStatus>;
     onProgress: (callback: (progress: DependencyProgress) => void) => () => void;
   };
+  /**
+   * 项目管理（Web 版独有）。
+   *
+   * 桌面版单机单项目，没有这个概念。Web 版必须多项目隔离：
+   * 一个用户可能同时在做多个投标项目，各自有独立的招标文件、
+   * 目录、正文和产物。
+   */
+  projects: {
+    current: (request?: { projectId?: string }) => Promise<ProjectItem>;
+    list: () => Promise<{ items: ProjectItem[]; count: number }>;
+    create: (request: { name: string }) => Promise<ProjectItem>;
+    select: (request: { projectId: string }) => Promise<ProjectItem>;
+    rename: (request: { projectId: string; name: string }) => Promise<{ renamed: boolean; name: string }>;
+    remove: (request: { projectId: string }) => Promise<{ deleted: boolean }>;
+  };
+  /**
+   * 产物库（Web 版独有）。
+   *
+   * 桌面版产物直接落本地磁盘，用户用文件管理器访问，不需要这个接口。
+   * Web 版产物在云端对象存储，必须通过界面访问。
+   */
+  assets: {
+    list: (query: AssetListQuery) => Promise<AssetListResult>;
+    task: (taskId: string) => Promise<AssetListResult>;
+    download: (assetId: string) => Promise<string>;
+    delete: (assetId: string) => Promise<{ success: boolean }>;
+  };
   dualLayerPdf: {
     getState: () => Promise<DualLayerPdfState>;
     getEnvironment: () => Promise<DualLayerPdfEnvironment>;
@@ -1012,4 +1055,76 @@ export interface AvailablePlugin {
     stage: string;
     message: string;
   };
+}
+
+// ---------- 产物库（Web 版） ----------
+
+/** 产物列表查询。 */
+export interface AssetListQuery {
+  /** 按类型过滤：docx / image / markdown / other；空表示全部 */
+  kind?: string;
+}
+
+/** 一个产物。 */
+export interface AssetItem {
+  id: string;
+  /** 相对路径，如 figures/<taskId>/fig-1.png */
+  name: string;
+  /** 资产类型 */
+  kind: string;
+  mimeType: string;
+  sizeBytes: number;
+  createdAt: string;
+  updatedAt: string;
+  /** 来源：agent / user / system */
+  source: string;
+  taskId?: string;
+  metadata?: Record<string, unknown>;
+}
+
+/** 产物列表结果。 */
+export interface AssetListResult {
+  assets: AssetItem[];
+  count: number;
+}
+
+// ---------- 项目管理（Web 版） ----------
+
+/** 一个投标项目。 */
+export interface ProjectItem {
+  id: string;
+  name: string;
+  tenantId: string;
+  createdAt: string;
+  updatedAt: string;
+  /** 招标文件名（未导入时为空） */
+  tenderFileName?: string;
+  /** 目录节点总数 */
+  outlineNodeCount: number;
+  /** 已有正文的节点数 */
+  contentCount: number;
+  /** 当前步骤 */
+  step?: string;
+  /** 运行中的任务数 */
+  runningTasks: number;
+}
+
+// ---------- 任务恢复（Web 版） ----------
+
+/** 一个可恢复的正文生成任务。 */
+export interface ResumableTask {
+  taskId: string;
+  projectId: string;
+  kind: string;
+  status: string;
+  /** 已完成的小节数 */
+  completedCount: number;
+  /** 剩余小节数 */
+  pendingCount: number;
+  /** 已完成字数 */
+  totalWords: number;
+  /** 上次活动时间 */
+  updatedAt: string;
+  /** 说明文字 */
+  hint: string;
 }

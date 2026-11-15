@@ -1,7 +1,7 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useCallback, useEffect, useState } from 'react';
 import { trackPageView } from '../../../shared/analytics/analytics';
-import { useToast } from '../../../shared/ui';
+import { EmptyState, useToast } from '../../../shared/ui';
 import type { ExportTemplateRecord } from '../../../shared/types/exportFormat';
 import { DEFAULT_EXPORT_FORMAT } from '../../../shared/types/exportFormat';
 import { ExportTemplateEditorDialog, TemplatePreview } from './ExportFormatPage';
@@ -144,7 +144,7 @@ function MyTemplatesPage() {
         </div>
 
         <div className="template-library-list">
-          {loading ? <div className="template-library-empty"><strong>正在读取模板</strong><span>请稍候...</span></div> : null}
+          {loading ? <EmptyState title="正在读取模板" hint="请稍候..." icon="◌" /> : null}
           {!loading && systemTemplates.length > 0 ? (
             <>
               <h3 className="template-library-group-title">系统预设模板</h3>
@@ -156,11 +156,14 @@ function MyTemplatesPage() {
             <>
               <h3 className="template-library-group-title">我的模板</h3>
               {userTemplates.length > 0 ? userTemplates.map(renderTemplateCard) : (
-                <div className="template-library-empty">
-                  <strong>还没有保存模板</strong>
-                  <span>可以从系统预设复制一份改，也可以新建一个从头配置。</span>
-                  <button type="button" className="primary-action" onClick={() => setEditor({ mode: 'create' })}>新建第一个模板</button>
-                </div>
+                <EmptyState
+                  title="还没有自定义模板"
+                  hint="上面有三个开箱可用的系统预设，复制一份就能改成自己的；也可以从头配置。"
+                  icon="＋"
+                  tip="提示：系统预设不可编辑，复制后会生成一份属于你的副本。"
+                >
+                  <button type="button" className="primary-action" onClick={() => setEditor({ mode: 'create' })}>新建模板</button>
+                </EmptyState>
               )}
             </>
           ) : null}
@@ -190,10 +193,13 @@ function MyTemplatesPage() {
             {!editor && <TemplatePreview config={previewConfig} />}
           </>
         ) : (
-          <div className="template-library-preview-empty">
-            <strong>暂无模板可预览</strong>
-            <span>保存模板后，这里会展示模板效果。</span>
-          </div>
+          <EmptyState
+            title="暂无模板可预览"
+            hint="在左侧选一个系统预设或自己的模板，这里会实时展示排版效果。"
+            icon="▤"
+            size="page"
+            tone="info"
+          />
         )}
       </section>
 

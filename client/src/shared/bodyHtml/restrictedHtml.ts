@@ -436,7 +436,7 @@ function parseFragment(fragment: string, index: number, ids: Map<string, number>
   };
 }
 
-/** 解析、清洗并校验一段易标受限 HTML。 */
+/** 解析、清洗并校验一段标书工作台受限 HTML。 */
 export function parseRestrictedHtml(source: string, options: RestrictedHtmlParseOptions = {}): RestrictedHtmlParseResult {
   const raw = String(source || '');
   const markerMatches = raw.match(BLOCK_MARKER_PATTERN) || [];

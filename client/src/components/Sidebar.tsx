@@ -1,13 +1,10 @@
 import * as Tooltip from '@radix-ui/react-tooltip';
 import { useEffect, useState, type ComponentType, type ReactElement, type SVGProps } from 'react';
 import { getAppMenuItems, getParentMenuItemBySection } from '../app/menuConfig';
-import NoticeBoardDialog from '../features/notice/components/NoticeBoardDialog';
-import { useNoticeUnread } from '../features/notice/hooks/useNoticeUnread';
 import type { AppMenuItem, SectionId } from '../shared/types/navigation';
 import { AppDialog, useNoticeToast } from '../shared/ui';
-import SidebarAdCard from './SidebarAdCard';
+import ProjectSwitcher from './ProjectSwitcher';
 import logoUrl from '../../assets/icon_256.png';
-import groupChatQrUrl from '../../assets/group-chat-qr.png';
 
 interface SidebarProps {
   activeSection: SectionId;
@@ -23,8 +20,8 @@ const navigationIcons: Record<SectionId, ComponentType<SVGProps<SVGSVGElement>>>
   'document-knowledge-base': ArchiveIcon,
   'credential-library': ArchiveIcon,
   'image-knowledge-base': ArchiveIcon,
-  'resource-download': ResourcesIcon,
-  resources: ResourcesIcon,
+  'resource-download': ArchiveIcon,
+  assets: ArchiveIcon,
   'bid-check': BidCheckIcon,
   'duplicate-check': CompareIcon,
   'rejection-check': ShieldIcon,
@@ -41,44 +38,18 @@ const navigationIcons: Record<SectionId, ComponentType<SVGProps<SVGSVGElement>>>
   'developer-layout-budget-test': FlaskIcon,
   'developer-agent-test': FlaskIcon,
   'plugin-manager': PluginIcon,
-  'dual-layer-pdf': ResourcesIcon,
+  'dual-layer-pdf': DocumentIcon,
   settings: GearIcon,
 };
 
-const USER_GUIDE_URL = 'https://wiki.agnet.top/';
-const SYSTEM_SETTINGS_URL = 'https://analytics.agnet.top/system-settings';
 
 function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
-  const [groupChatOpen, setGroupChatOpen] = useState(false);
-  const [groupChatQrSource, setGroupChatQrSource] = useState(groupChatQrUrl);
-  const [noticeOpen, setNoticeOpen] = useState(false);
-  const { hasUnread: noticeUnread, markSeen: markNoticeSeen } = useNoticeUnread();
+  const [guideOpen, setGuideOpen] = useState(false);
   const showNotice = useNoticeToast();
   const menuItems = getAppMenuItems(developerMode);
   const activeParent = getParentMenuItemBySection(activeSection, developerMode);
 
-  useEffect(() => {
-    let active = true;
-
-    // 远程二维码完整加载后再替换，查询或图片失败时继续使用内置图片。
-    void fetch(SYSTEM_SETTINGS_URL)
-      .then((response) => response.ok ? response.json() : null)
-      .then((data) => new Promise<string>((resolve, reject) => {
-        const url = String(data?.settings?.groupChatQrUrl || '');
-        if (!url) return reject();
-        const image = new Image();
-        image.onload = () => resolve(url);
-        image.onerror = reject;
-        image.src = url;
-      }))
-      .then((url) => {
-        if (active) setGroupChatQrSource(url);
-      })
-      .catch(() => undefined);
-
-    return () => { active = false; };
-  }, []);
 
   const handleMenuItemClick = (item: AppMenuItem) => {
     if (!item.notice) {
@@ -98,10 +69,13 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
           <img src={logoUrl} alt="" />
         </div>
         <div className="brand-copy">
-          <span>易标</span>
-          <strong>投标工具箱</strong>
+          <strong>标书工作台</strong>
+          <span>投标全流程助手</span>
         </div>
       </div>
+
+      {/* 项目切换器：项目是全局作用域，放在 logo 下方最显眼 */}
+      {!collapsed ? <ProjectSwitcher /> : null}
 
       <button
         type="button"
@@ -139,32 +113,47 @@ function Sidebar({ activeSection, developerMode, onSectionChange }: SidebarProps
         })}
       </nav>
 
-      <SidebarAdCard collapsed={collapsed} />
-
       <div className="sidebar-footer">
         <div className="sidebar-footer-shortcuts">
-          {collapsed ? wrapTooltip('使用文档', renderUserGuideButton()) : renderUserGuideButton()}
-          {collapsed
-            ? wrapTooltip('公告', renderNoticeButton(noticeUnread, () => setNoticeOpen(true)))
-            : renderNoticeButton(noticeUnread, () => setNoticeOpen(true))}
+          {collapsed ? wrapTooltip('使用说明', renderUserGuideButton(() => setGuideOpen(true))) : renderUserGuideButton(() => setGuideOpen(true))}
           {collapsed ? wrapTooltip('设置', renderSettingsButton(activeSection, onSectionChange)) : renderSettingsButton(activeSection, onSectionChange)}
-          {collapsed ? wrapTooltip('加群', renderGroupChatButton(() => setGroupChatOpen(true))) : renderGroupChatButton(() => setGroupChatOpen(true))}
         </div>
       </div>
 
       <AppDialog
-        open={groupChatOpen}
-        onOpenChange={setGroupChatOpen}
-        kicker="用户交流"
-        title="开源软件没有客服！没有客服！！没有客服！！！"
-        description="欢迎AI、招投标相关从业者一起探讨技术～。"
-        cardClassName="group-chat-dialog"
-        actions={<button type="button" className="secondary-action" onClick={() => setGroupChatOpen(false)}>关闭</button>}
+        open={guideOpen}
+        onOpenChange={setGuideOpen}
+        kicker="使用说明"
+        title="这个工具能做什么"
+        actions={<button type="button" className="secondary-action" onClick={() => setGuideOpen(false)}>知道了</button>}
       >
-        <img className="group-chat-qr" src={groupChatQrSource} alt="易标用户交流群二维码" />
+        <div className="guide-content">
+          <section>
+            <h4>内容生成</h4>
+            <p>导入招标文件 → AI 解析拆解要点 → 生成技术方案目录 → 逐章生成正文 → 导出 Word。</p>
+          </section>
+          <section>
+            <h4>标书检查</h4>
+            <p>
+              <strong>标书查重</strong>：比对投标文件之间的重复段落，检出抄袭与漏项。<br />
+              <strong>废标项检查</strong>：抽取招标文件里的硬性条款，逐条核验响应情况。<br />
+              <strong>暗标检查</strong>：64 条格式规则 + 身份信息检查，可一键自动修复。
+            </p>
+          </section>
+          <section>
+            <h4>知识库</h4>
+            <p>上传企业素材、资质证书、历史方案，生成内容时会自动引用。</p>
+          </section>
+          <section>
+            <h4>模版设置</h4>
+            <p>配置导出的 Word 排版：字体、字号、行距、页边距、页眉页脚。</p>
+          </section>
+          <section>
+            <h4>需要帮助</h4>
+            <p>数据存放在你部署的服务器上，不会外传。遇到问题联系系统管理员。</p>
+          </section>
+        </div>
       </AppDialog>
-
-      <NoticeBoardDialog open={noticeOpen} onOpenChange={setNoticeOpen} onLoaded={markNoticeSeen} />
     </aside>
   );
 }
@@ -201,60 +190,25 @@ function renderSettingsButton(activeSection: SectionId, onSectionChange: (sectio
   );
 }
 
-function renderUserGuideButton() {
+function renderUserGuideButton(onOpen: () => void) {
   return (
     <button
       type="button"
       className="settings-trigger sidebar-footer-shortcut"
-      onClick={() => void openExternalUrl(USER_GUIDE_URL)}
-      aria-label="使用文档"
+      onClick={onOpen}
+      aria-label="使用说明"
     >
       <span className="nav-icon" aria-hidden="true">
         <BookIcon />
       </span>
       <span className="settings-copy">
-        <strong>文档</strong>
+        <strong>说明</strong>
       </span>
     </button>
   );
 }
 
-function renderGroupChatButton(onClick: () => void) {
-  return (
-    <button
-      type="button"
-      className="settings-trigger sidebar-footer-shortcut"
-      onClick={onClick}
-      aria-label="加群"
-    >
-      <span className="nav-icon" aria-hidden="true">
-        <GroupChatIcon />
-      </span>
-      <span className="settings-copy">
-        <strong>加群</strong>
-      </span>
-    </button>
-  );
-}
 
-function renderNoticeButton(hasUnread: boolean, onClick: () => void) {
-  return (
-    <button
-      type="button"
-      className="settings-trigger sidebar-footer-shortcut"
-      onClick={onClick}
-      aria-label="公告"
-    >
-      <span className="nav-icon" aria-hidden="true">
-        <NoticeIcon />
-        {hasUnread ? <span className="sidebar-unread-dot" /> : null}
-      </span>
-      <span className="settings-copy">
-        <strong>公告</strong>
-      </span>
-    </button>
-  );
-}
 
 function wrapTooltip(label: string, child: ReactElement) {
   return (
@@ -303,16 +257,6 @@ function ArchiveIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
-function ResourcesIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
-      <path d="M4.8 6.4h4v12.2h-4z" />
-      <path d="M10.1 4.8h4.2v13.8h-4.2z" />
-      <path d="m15.4 7.1 3.4-.9 2.7 10.8-3.4.85z" />
-      <path d="M4 19.3h16.8" />
-    </svg>
-  );
-}
 
 function BidCheckIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -402,15 +346,6 @@ function GroupChatIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
-function NoticeIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <path d="M4.5 10v4h3l6 4V6l-6 4z" />
-      <path d="M17 9.5a3.5 3.5 0 0 1 0 5" />
-      <path d="M19.5 7a7 7 0 0 1 0 10" />
-    </svg>
-  );
-}
 
 function ChevronIcon(props: SVGProps<SVGSVGElement>) {
   return (

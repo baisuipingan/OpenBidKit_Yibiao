@@ -457,31 +457,56 @@ function CredentialLibraryPage({ developerMode }: { developerMode: boolean }) {
     }
   };
 
+  /**
+   * 基本信息完成度。
+   *
+   * 20 多个字段一屏放不下，用户不知道还差几项。
+   * 顶部显示「已填 X/Y」，填完一项就动一次，给正向反馈。
+   */
+  const basicFieldKeys: Array<keyof typeof profile> = [
+    'companyName', 'unifiedSocialCreditCode', 'legalRepresentative',
+    'registeredCapital', 'address', 'phone', 'email',
+    'industry', 'companyType', 'businessScope',
+  ];
+  const basicFieldCount = basicFieldKeys.length;
+  const basicFilledCount = basicFieldKeys.filter((key) => {
+    const value = profile[key];
+    return typeof value === 'string' && value.trim() !== '';
+  }).length;
+
   /** 渲染企业基本信息。 */
   const renderBasicPanel = () => (
     <section className="credential-section-card">
       <div className="credential-section-head">
-        <div><strong>企业基本信息</strong><small>当前资信库固定维护一家企业，所有字段均可留空。</small></div>
+        <div>
+          <strong>企业基本信息</strong>
+          <small>共 {basicFieldCount} 项，已填 {basicFilledCount} 项</small>
+        </div>
         <span className="credential-save-status" aria-live="polite">{profileStatus}</span>
       </div>
       <div className="credential-form-grid">
+        <div className="credential-field-group">工商登记信息</div>
         <FormField label="公司名称"><input value={profile.companyName} onChange={(event) => updateProfile('companyName', event.target.value)} onBlur={() => void saveProfile({ companyName: profile.companyName })} /></FormField>
         <FormField label="统一社会信用代码"><input value={profile.unifiedSocialCreditCode} onChange={(event) => updateProfile('unifiedSocialCreditCode', event.target.value)} onBlur={() => void saveProfile({ unifiedSocialCreditCode: profile.unifiedSocialCreditCode })} /></FormField>
+        <div className="credential-field-group">联系方式</div>
         <FormField label="电话"><input type="tel" value={profile.phone} onChange={(event) => updateProfile('phone', event.target.value)} onBlur={() => void saveProfile({ phone: profile.phone })} /></FormField>
         <FormField label="邮箱"><input type="email" value={profile.email} onChange={(event) => updateProfile('email', event.target.value)} onBlur={() => void saveProfile({ email: profile.email })} /></FormField>
         <FormField label="邮政编码"><input value={profile.postalCode} onChange={(event) => updateProfile('postalCode', event.target.value)} onBlur={() => void saveProfile({ postalCode: profile.postalCode })} /></FormField>
         <FormField label="传真"><input type="tel" value={profile.fax} onChange={(event) => updateProfile('fax', event.target.value)} onBlur={() => void saveProfile({ fax: profile.fax })} /></FormField>
         <FormField label="法定代表人"><input value={profile.legalRepresentative} onChange={(event) => updateProfile('legalRepresentative', event.target.value)} onBlur={() => void saveProfile({ legalRepresentative: profile.legalRepresentative })} /></FormField>
         <FormField label="法定代表人身份证号"><input value={profile.legalRepresentativeIdNumber} onChange={(event) => updateProfile('legalRepresentativeIdNumber', event.target.value)} onBlur={() => void saveProfile({ legalRepresentativeIdNumber: profile.legalRepresentativeIdNumber })} /></FormField>
+        <div className="credential-field-group">经营与资质</div>
         <FormField label="注册资本"><input value={profile.registeredCapital} placeholder="如：1000万元" onChange={(event) => updateProfile('registeredCapital', event.target.value)} onBlur={() => void saveProfile({ registeredCapital: profile.registeredCapital })} /></FormField>
         <FormField label="经营期限开始"><input type="date" value={profile.operatingPeriodStart} onChange={(event) => updateProfile('operatingPeriodStart', event.target.value)} onBlur={() => void saveProfile({ operatingPeriodStart: profile.operatingPeriodStart })} /></FormField>
         <FormField label="经营期限结束"><input type="date" value={profile.operatingPeriodEnd} onChange={(event) => updateProfile('operatingPeriodEnd', event.target.value)} onBlur={() => void saveProfile({ operatingPeriodEnd: profile.operatingPeriodEnd })} /></FormField>
         <FormField label="所在行业"><input value={profile.industry} onChange={(event) => updateProfile('industry', event.target.value)} onBlur={() => void saveProfile({ industry: profile.industry })} /></FormField>
         <FormField label="公司性质"><input value={profile.companyType} onChange={(event) => updateProfile('companyType', event.target.value)} onBlur={() => void saveProfile({ companyType: profile.companyType })} /></FormField>
+        <div className="credential-field-group">规模指标</div>
         <FormField label="参保人数"><input type="number" min="0" value={profile.insuredEmployeeCount} onChange={(event) => updateProfile('insuredEmployeeCount', event.target.value)} onBlur={() => void saveProfile({ insuredEmployeeCount: profile.insuredEmployeeCount })} /></FormField>
         <FormField label="上年度从业人员（人）"><input type="number" min="0" value={profile.lastYearEmployeeCount} onChange={(event) => updateProfile('lastYearEmployeeCount', event.target.value)} onBlur={() => void saveProfile({ lastYearEmployeeCount: profile.lastYearEmployeeCount })} /></FormField>
         <FormField label="上年度营业收入（万元）"><input placeholder="按万元填写，如：1200" value={profile.lastYearRevenue} onChange={(event) => updateProfile('lastYearRevenue', event.target.value)} onBlur={() => void saveProfile({ lastYearRevenue: profile.lastYearRevenue })} /></FormField>
         <FormField label="上年度资产总额（万元）"><input placeholder="按万元填写，如：800" value={profile.lastYearTotalAssets} onChange={(event) => updateProfile('lastYearTotalAssets', event.target.value)} onBlur={() => void saveProfile({ lastYearTotalAssets: profile.lastYearTotalAssets })} /></FormField>
+        <div className="credential-field-group">地址与经营范围</div>
         <FormField label="地址" wide><input value={profile.address} onChange={(event) => updateProfile('address', event.target.value)} onBlur={() => void saveProfile({ address: profile.address })} /></FormField>
         <FormField label="经营范围" wide><textarea rows={5} value={profile.businessScope} onChange={(event) => updateProfile('businessScope', event.target.value)} onBlur={() => void saveProfile({ businessScope: profile.businessScope })} /></FormField>
       </div>

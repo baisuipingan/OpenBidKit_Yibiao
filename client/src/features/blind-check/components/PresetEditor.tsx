@@ -200,7 +200,9 @@ function CredentialWords({ enabled, words, busy, onToggle }: CredentialWordsProp
 
 /** 预设编辑：选择和开关立即提交，数字与词表失焦提交；内置预设只读。 */
 export default function PresetEditor({ tab, profile, readOnly, onCommit, credential, source }: PresetEditorProps) {
-  const sections = presetSections[tab];
+  // tab 兜底：未知页签回退到「纸张与页边距」，
+  // 否则 sections 为 undefined，sections.map 会让整页白屏。
+  const sections = presetSections[tab] || presetSections.page;
   return (
     <div className="blind-check-preset-editor">
       {tab === 'privacy' && <CredentialWords {...credential} />}

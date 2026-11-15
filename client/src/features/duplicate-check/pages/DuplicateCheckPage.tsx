@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { trackPageView } from '../../../shared/analytics/analytics';
-import { AppDialog, FloatingToolbar, isLibreOfficeRequiredMessage, ProgressBar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, UploadBoard, UploadEmpty, UploadFilePill, UploadRow, useDocumentParseNotice, useToast } from '../../../shared/ui';
+import { AppDialog, EmptyState, FloatingToolbar, isLibreOfficeRequiredMessage, ProgressBar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, UploadBoard, UploadEmpty, UploadFilePill, UploadRow, useDocumentParseNotice, useToast } from '../../../shared/ui';
 import type { FloatingToolbarGroup } from '../../../shared/ui';
 import { hasExportableDuplicateResults } from '../exportState';
 import type { DuplicateAnalysisStatus, DuplicateAnalysisTabId, DuplicateCheckStep, DuplicateCheckTaskState, DuplicateCheckWorkspaceState, DuplicateContentAnalysisState, DuplicateImageAnalysisState, DuplicateMetadataAnalysisState, DuplicateOutlineAnalysisState, LocalFileSelection } from '../../../shared/types';
@@ -213,17 +213,21 @@ function DuplicateMetadataPane({ analysis, bidFiles }: { analysis?: DuplicateMet
       </div>
 
       {!analysis && (
-        <div className="duplicate-analysis-empty">
-          <strong>等待启动元数据分析</strong>
-          <p>首次进入查重结果后，会自动并发执行正文内容提取和投标文件元数据提取。</p>
-        </div>
+        <EmptyState
+          title="等待启动元数据分析"
+          hint="首次进入查重结果后，会自动并发执行正文内容提取和投标文件元数据提取。"
+          tone="info"
+          icon="◌"
+        />
       )}
 
       {analysis && !rows.length && (
-        <div className="duplicate-analysis-empty">
-          <strong>{isRunning ? '正在提取元数据' : '暂无可对比元数据'}</strong>
-          <p>{analysis.message || '请稍候，文件较多时需要一定时间。'}</p>
-        </div>
+        <EmptyState
+          title={isRunning ? '正在提取元数据' : '暂无可对比元数据'}
+          hint={analysis.message || '请稍候，文件较多时需要一定时间。'}
+          tone={isRunning ? 'info' : 'neutral'}
+          icon={isRunning ? '◌' : '○'}
+        />
       )}
 
       {rows.length > 0 && (
@@ -291,7 +295,7 @@ function DuplicateOutlinePane({ analysis, bidFiles }: { analysis?: DuplicateOutl
   }
 
   if (!analysis) {
-    return <div className="duplicate-analysis-empty"><strong>等待目录分析</strong><p>元数据提取完成后会自动开始目录分析。</p></div>;
+    return <EmptyState title="等待目录分析" hint="元数据提取完成后会自动开始目录分析。" tone="info" icon="◌" />;
   }
 
   return (
@@ -338,10 +342,18 @@ function DuplicateOutlinePane({ analysis, bidFiles }: { analysis?: DuplicateOutl
           <PaginationControls page={currentPage} pageSize={pageSize} total={duplicateGroups.length} onPageChange={setPage} />
         </section>
       ) : (
-        <div className="duplicate-analysis-empty">
-          <strong>{analysis.status === 'running' ? '正在分析目录' : '未发现重复目录'}</strong>
-          <p>{analysis.status === 'running' ? analysis.message : successfulFiles.length > 0 ? '未发现投标文件之间的目录重复；来自招标文件的目录项已自动排除。' : '暂无可用目录结果。'}</p>
-        </div>
+        <EmptyState
+          title={analysis.status === 'running' ? '正在分析目录' : '未发现重复目录'}
+          hint={
+            analysis.status === 'running'
+              ? analysis.message
+              : successfulFiles.length > 0
+                ? '未发现投标文件之间的目录重复；来自招标文件的目录项已自动排除。'
+                : '暂无可用目录结果。'
+          }
+          tone={analysis.status === 'running' ? 'info' : 'success'}
+          icon={analysis.status === 'running' ? '◌' : '✓'}
+        />
       )}
     </div>
   );
@@ -369,7 +381,7 @@ function DuplicateContentPane({ analysis, bidFiles }: { analysis?: DuplicateCont
   }
 
   if (!analysis) {
-    return <div className="duplicate-analysis-empty"><strong>等待正文比对</strong><p>正文内容提取完成后会自动开始句子级比对。</p></div>;
+    return <EmptyState title="等待正文比对" hint="正文内容提取完成后会自动开始句子级比对。" tone="info" icon="◌" />;
   }
 
   return (
@@ -410,10 +422,30 @@ function DuplicateContentPane({ analysis, bidFiles }: { analysis?: DuplicateCont
           <PaginationControls page={currentPage} pageSize={pageSize} total={duplicateSentences.length} onPageChange={setPage} />
         </section>
       ) : (
-        <div className="duplicate-analysis-empty">
-          <strong>{analysis.status === 'running' ? '正在比对正文' : '未发现重复句子'}</strong>
-          <p>{analysis.status === 'running' ? analysis.message : '未发现投标文件之间的重复句子；引用招标文件的句子已自动排除。'}</p>
-        </div>
+        analysis.status === 'running' ? (
+          <EmptyState
+            title="正在比对正文"
+            hint={analysis.message || '正在分析投标文件之间的重复段落，请稍候...'}
+            tone="info"
+            icon="◌"
+          />
+        ) : (
+          /*
+           * 无重复是一个「好结果」，不该用空态表达。
+           * 改成成功卡片：明确告知结论 + 给出下一步能做什么，
+           * 而不是留一大片空白让用户怀疑是不是没跑。
+           */
+          <div className="duplicate-result-success">
+            <div className="duplicate-success-icon" aria-hidden="true">✓</div>
+            <div className="duplicate-success-body">
+              <strong>未发现重复句子</strong>
+              <p>已比对投标文件之间的正文段落，未发现重复内容。引用招标文件的句子已自动排除，不计入重复。</p>
+              <div className="duplicate-success-hint">
+                可以继续查看「图片」「元数据」「目录」等维度，或直接进入下一步
+              </div>
+            </div>
+          </div>
+        )
       )}
     </div>
   );
@@ -441,7 +473,7 @@ function DuplicateImagePane({ analysis, bidFiles }: { analysis?: DuplicateImageA
   }
 
   if (!analysis) {
-    return <div className="duplicate-analysis-empty"><strong>等待图片比对</strong><p>正文内容提取完成后会自动按图片 hash 比对。</p></div>;
+    return <EmptyState title="等待图片比对" hint="正文内容提取完成后会自动按图片 hash 比对。" tone="info" icon="◌" />;
   }
 
   return (
@@ -490,10 +522,12 @@ function DuplicateImagePane({ analysis, bidFiles }: { analysis?: DuplicateImageA
           <PaginationControls page={currentPage} pageSize={pageSize} total={duplicateImages.length} onPageChange={setPage} />
         </section>
       ) : (
-        <div className="duplicate-analysis-empty">
-          <strong>{analysis.status === 'running' ? '正在比对图片' : '未发现重复图片'}</strong>
-          <p>{analysis.status === 'running' ? analysis.message : '未发现投标文件之间完全相同的图片。'}</p>
-        </div>
+        <EmptyState
+          title={analysis.status === 'running' ? '正在比对图片' : '未发现重复图片'}
+          hint={analysis.status === 'running' ? analysis.message : '未发现投标文件之间完全相同的图片。'}
+          tone={analysis.status === 'running' ? 'info' : 'success'}
+          icon={analysis.status === 'running' ? '◌' : '✓'}
+        />
       )}
     </div>
   );

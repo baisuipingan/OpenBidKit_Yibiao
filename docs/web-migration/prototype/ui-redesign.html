@@ -1,0 +1,1133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>标书工作台 — UI 重设计原型</title>
+<style>
+  :root {
+    --primary: #2174fd;
+    --primary-hover: #4098fc;
+    --primary-soft: #e8f1ff;
+    --success: #168a4a;
+    --success-soft: #e6f5ec;
+    --danger: #e5484d;
+    --warning: #f5a524;
+    --bg: #fafcff;
+    --surface: #ffffff;
+    --border: #e6e9f0;
+    --border-soft: #eef2f9;
+    --text: #1c2536;
+    --text-soft: #66707f;
+    --text-muted: #98a2b3;
+    --step-inactive: #cbd5e1;
+    --radius: 12px;
+    --radius-sm: 8px;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ============ 布局骨架 ============ */
+  .app {
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* ---- 侧边栏 ---- */
+  .sidebar {
+    width: 240px;
+    flex-shrink: 0;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    transition: width .22s cubic-bezier(.4,0,.2,1);
+  }
+  .sidebar.collapsed { width: 64px; }
+  .sidebar.collapsed .brand-copy,
+  .sidebar.collapsed .nav-copy,
+  .sidebar.collapsed .project-switcher { display: none; }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 18px 16px;
+  }
+  .brand-mark {
+    width: 32px; height: 32px;
+    border-radius: 9px;
+    background: linear-gradient(135deg, var(--primary), #5b54d3);
+    display: grid; place-items: center;
+    color: #fff; font-weight: 700; font-size: 15px;
+    flex-shrink: 0;
+  }
+  .brand-copy strong { display: block; font-size: 14px; font-weight: 650; }
+  .brand-copy span { font-size: 11px; color: var(--text-muted); }
+
+  .project-switcher {
+    margin: 0 12px 14px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    color: var(--text-soft);
+    display: flex; align-items: center; justify-content: space-between;
+    cursor: pointer;
+  }
+  .project-switcher:hover { border-color: var(--primary); }
+
+  .nav { padding: 0 8px; flex: 1; overflow-y: auto; }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 10px;
+    border-radius: var(--radius-sm);
+    color: var(--text-soft);
+    cursor: pointer;
+    margin-bottom: 2px;
+    transition: background .15s;
+  }
+  .nav-item:hover { background: var(--border-soft); }
+  .nav-item.active {
+    background: var(--primary);
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(33,116,253,.28);
+  }
+  .nav-icon {
+    width: 18px; height: 18px; flex-shrink: 0;
+    display: grid; place-items: center;
+    font-size: 14px; opacity: .85;
+  }
+  .nav-copy strong { display: block; font-size: 13px; font-weight: 550; }
+  .nav-copy small { font-size: 11px; opacity: .65; }
+
+  .sidebar-footer {
+    padding: 12px 8px;
+    border-top: 1px solid var(--border-soft);
+    display: flex; gap: 6px;
+  }
+  .footer-btn {
+    flex: 1;
+    padding: 7px; border: 1px solid var(--border);
+    border-radius: var(--radius-sm); background: var(--surface);
+    font-size: 12px; color: var(--text-soft); cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 5px;
+  }
+  .footer-btn:hover { border-color: var(--primary); color: var(--primary); }
+
+  /* ---- 主区 ---- */
+  .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+  /* ---- 步骤条（吸顶）---- */
+  .stepbar {
+    flex-shrink: 0;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 28px 14px;
+    display: flex;
+    align-items: flex-start;
+    gap: 0;
+    overflow-x: auto;
+  }
+  .step {
+    flex: 1;
+    min-width: 96px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    position: relative;
+    cursor: default;
+    padding-bottom: 2px;
+  }
+  .step.done { cursor: pointer; }
+
+  /* 连接线 */
+  .step:not(:last-child)::after {
+    content: '';
+    position: absolute;
+    top: 13px;
+    left: calc(50% + 18px);
+    right: calc(-50% + 18px);
+    height: 2px;
+    background: var(--step-inactive);
+    transition: background .2s;
+  }
+  .step.done:not(:last-child)::after { background: var(--success); }
+
+  .step-dot {
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    display: grid; place-items: center;
+    font-size: 12px; font-weight: 600;
+    border: 2px solid var(--step-inactive);
+    background: var(--surface);
+    color: var(--text-muted);
+    position: relative;
+    z-index: 1;
+    transition: all .2s;
+  }
+  .step.done .step-dot {
+    background: var(--success); border-color: var(--success); color: #fff;
+  }
+  .step.active .step-dot {
+    background: var(--primary); border-color: var(--primary); color: #fff;
+    box-shadow: 0 0 0 4px var(--primary-soft);
+  }
+  .step.error .step-dot {
+    background: var(--danger); border-color: var(--danger); color: #fff;
+  }
+
+  .step-name {
+    margin-top: 7px;
+    font-size: 12px;
+    font-weight: 550;
+    color: var(--text-soft);
+    white-space: nowrap;
+  }
+  .step.active .step-name { color: var(--primary); font-weight: 650; }
+  .step.done .step-name { color: var(--text); }
+
+  .step-meta {
+    margin-top: 2px;
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
+  /* ---- 内容区 ---- */
+  .content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 28px 28px 20px;
+    min-height: 0;
+  }
+
+  /* ---- 页头 ---- */
+  .page-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 20px;
+  }
+  .page-head h1 {
+    margin: 0 0 5px;
+    font-size: 22px;
+    font-weight: 650;
+    letter-spacing: -.01em;
+  }
+  .page-head p {
+    margin: 0;
+    font-size: 13px;
+    color: var(--text-soft);
+    line-height: 1.6;
+  }
+
+  /* ---- 卡片 ---- */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  .card-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 14px;
+  }
+  .card-title { font-size: 15px; font-weight: 650; }
+  .card-desc { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
+
+  /* ---- 按钮 ---- */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 8px 16px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    font-size: 13px;
+    font-weight: 550;
+    color: var(--text);
+    cursor: pointer;
+    transition: all .15s;
+    font-family: inherit;
+  }
+  .btn:hover { border-color: var(--primary); color: var(--primary); }
+  .btn-primary {
+    background: var(--primary); border-color: var(--primary); color: #fff;
+    box-shadow: 0 2px 8px rgba(33,116,253,.26);
+  }
+  .btn-primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); color: #fff; }
+  .btn-ghost { border-color: transparent; color: var(--text-soft); }
+  .btn-ghost:hover { background: var(--border-soft); border-color: transparent; }
+  .btn-danger { color: var(--danger); }
+  .btn-danger:hover { border-color: var(--danger); color: var(--danger); background: #fef2f2; }
+  .btn-sm { padding: 5px 11px; font-size: 12px; }
+  .btn-icon {
+    width: 30px; height: 30px; padding: 0;
+    border-radius: var(--radius-sm);
+  }
+
+  /* ---- 底部操作栏（固定）---- */
+  .actionbar {
+    flex-shrink: 0;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    padding: 12px 28px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .actionbar-left, .actionbar-right { display: flex; align-items: center; gap: 8px; }
+
+  /* ---- 上传区 ---- */
+  .upload-row {
+    border: 1px dashed var(--border);
+    border-radius: var(--radius);
+    padding: 18px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    transition: all .15s;
+    background: #fcfdff;
+  }
+  .upload-row:hover { border-color: var(--primary); background: var(--primary-soft); }
+  .upload-index {
+    width: 26px; height: 26px; border-radius: 50%;
+    background: var(--primary-soft); color: var(--primary);
+    display: grid; place-items: center;
+    font-size: 12px; font-weight: 650; flex-shrink: 0;
+  }
+  .upload-body { flex: 1; }
+  .upload-body strong { font-size: 14px; display: block; margin-bottom: 3px; }
+  .upload-body span { font-size: 12px; color: var(--text-muted); }
+
+  .file-pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 10px;
+    background: var(--primary-soft);
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--primary);
+    margin-top: 10px;
+  }
+
+  /* ---- 空态 ---- */
+  .empty {
+    text-align: center;
+    padding: 48px 24px;
+    max-width: 460px;
+    margin: 0 auto;
+  }
+  .empty-icon {
+    width: 52px; height: 52px;
+    border-radius: 14px;
+    background: var(--border-soft);
+    display: grid; place-items: center;
+    font-size: 24px;
+    margin: 0 auto 16px;
+    opacity: .8;
+  }
+  .empty h3 { margin: 0 0 8px; font-size: 16px; font-weight: 650; }
+  .empty p { margin: 0 0 20px; font-size: 13px; color: var(--text-soft); line-height: 1.7; }
+  .empty-tip {
+    margin-top: 24px; padding-top: 18px;
+    border-top: 1px dashed var(--border);
+    font-size: 12px; color: var(--text-muted);
+  }
+
+  /* ---- 两栏（设置页）---- */
+  .split {
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    gap: 16px;
+    align-items: start;
+  }
+  .side-nav { display: flex; flex-direction: column; gap: 2px; }
+  .side-nav-item {
+    padding: 9px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    color: var(--text-soft);
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .side-nav-item:hover { background: var(--border-soft); }
+  .side-nav-item.active {
+    background: var(--primary-soft);
+    color: var(--primary);
+    font-weight: 600;
+  }
+  .side-nav-item .dot {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--step-inactive);
+  }
+  .side-nav-item.complete .dot { background: var(--success); }
+
+  .progress-mini {
+    margin-top: 14px;
+    padding: 12px;
+    background: var(--bg);
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    color: var(--text-soft);
+  }
+  .progress-mini strong { color: var(--text); font-size: 13px; }
+  .progress-bar {
+    height: 4px; background: var(--border); border-radius: 2px;
+    margin-top: 8px; overflow: hidden;
+  }
+  .progress-bar span {
+    display: block; height: 100%;
+    background: var(--primary); border-radius: 2px;
+    transition: width .3s;
+  }
+
+  /* ---- 表单 ---- */
+  .field { margin-bottom: 16px; }
+  .field label {
+    display: block; font-size: 12px; font-weight: 600;
+    color: var(--text-soft); margin-bottom: 6px;
+  }
+  .field .req { color: var(--danger); }
+  .field input, .field textarea {
+    width: 100%; padding: 9px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 13px; font-family: inherit;
+    color: var(--text); background: var(--surface);
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .field input:focus, .field textarea:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px var(--primary-soft);
+  }
+  .field textarea { resize: vertical; min-height: 80px; }
+  .field-hint { font-size: 11px; color: var(--text-muted); margin-top: 5px; }
+
+  .field-group-title {
+    font-size: 12px; font-weight: 650;
+    color: var(--text);
+    padding: 14px 0 10px;
+    border-top: 1px solid var(--border-soft);
+    margin-top: 6px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .field-group-title:first-child { border-top: none; padding-top: 0; margin-top: 0; }
+  .field-group-title .badge {
+    font-size: 11px; font-weight: 500;
+    color: var(--text-muted);
+    background: var(--border-soft);
+    padding: 2px 7px; border-radius: 4px;
+  }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; }
+
+  /* ---- 目录三栏→可折叠 ---- */
+  .outline-layout {
+    display: grid;
+    grid-template-columns: 48px minmax(320px, 1fr) minmax(360px, 420px);
+    gap: 16px;
+    height: calc(100vh - 300px);
+    min-height: 380px;
+  }
+  .outline-rail {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    display: flex; flex-direction: column;
+    align-items: center;
+    padding: 14px 0;
+    gap: 14px;
+    cursor: pointer;
+  }
+  .outline-rail:hover { border-color: var(--primary); }
+  .ring {
+    width: 34px; height: 34px;
+    border-radius: 50%;
+    background: conic-gradient(var(--success) 0% 100%, var(--border) 100%);
+    display: grid; place-items: center;
+    position: relative;
+  }
+  .ring::after {
+    content: '';
+    width: 26px; height: 26px; border-radius: 50%;
+    background: var(--surface);
+    position: absolute;
+  }
+  .ring-label {
+    position: relative; z-index: 1;
+    font-size: 10px; font-weight: 700; color: var(--success);
+  }
+  .rail-text {
+    writing-mode: vertical-rl;
+    font-size: 11px; color: var(--text-muted);
+    letter-spacing: .05em;
+  }
+
+  .outline-tree, .outline-detail {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    display: flex; flex-direction: column;
+    min-height: 0;
+  }
+  .panel-head {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border-soft);
+    display: flex; align-items: center; justify-content: space-between;
+    flex-shrink: 0;
+  }
+  .panel-head strong { font-size: 14px; font-weight: 650; }
+  .panel-head .count {
+    font-size: 11px; color: var(--text-muted);
+    background: var(--border-soft); padding: 2px 7px; border-radius: 4px;
+    margin-left: 6px;
+  }
+
+  .tree-list { overflow-y: auto; flex: 1; padding: 8px; }
+  .tree-chapter {
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-size: 13px; font-weight: 600;
+    cursor: pointer;
+    display: flex; align-items: center; gap: 7px;
+    color: var(--text);
+  }
+  .tree-chapter:hover { background: var(--border-soft); }
+  .tree-chapter.active { background: var(--primary-soft); color: var(--primary); }
+  .tree-section {
+    padding: 7px 10px 7px 32px;
+    font-size: 12.5px;
+    color: var(--text-soft);
+    cursor: pointer;
+    border-radius: 6px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .tree-section:hover { background: var(--border-soft); color: var(--text); }
+  .tree-section.active { background: var(--primary-soft); color: var(--primary); }
+  .tag-done {
+    font-size: 10px; padding: 1px 6px; border-radius: 3px;
+    background: var(--success-soft); color: var(--success);
+    font-weight: 500;
+  }
+  .tag-todo {
+    font-size: 10px; padding: 1px 6px; border-radius: 3px;
+    background: var(--border-soft); color: var(--text-muted);
+  }
+
+  .detail-body {
+    padding: 18px; overflow-y: auto; flex: 1;
+    font-size: 13px; line-height: 1.8; color: var(--text-soft);
+  }
+  .detail-body h2 {
+    font-size: 17px; font-weight: 650; color: var(--text);
+    margin: 0 0 12px;
+  }
+  .detail-actions {
+    padding: 12px 16px;
+    border-top: 1px solid var(--border-soft);
+    display: flex; gap: 8px; flex-shrink: 0;
+  }
+
+  /* ---- Toast ---- */
+  .toast-wrap {
+    position: fixed; top: 16px; right: 16px;
+    display: flex; flex-direction: column; gap: 8px;
+    z-index: 100;
+  }
+  .toast {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--danger);
+    border-radius: var(--radius-sm);
+    padding: 12px 14px;
+    min-width: 280px; max-width: 360px;
+    box-shadow: 0 6px 24px rgba(16,24,40,.12);
+    font-size: 13px;
+    animation: slideIn .25s ease;
+  }
+  .toast strong { display: block; font-size: 13px; margin-bottom: 3px; color: var(--danger); }
+  .toast span { color: var(--text-soft); font-size: 12px; }
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateX(16px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+
+  /* ---- 视图切换 ---- */
+  .views {
+    position: fixed; bottom: 74px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 4px; z-index: 90;
+    background: rgba(255,255,255,.92);
+    backdrop-filter: blur(8px);
+    padding: 4px; border-radius: 20px;
+    border: 1px solid var(--border);
+    box-shadow: 0 2px 12px rgba(16,24,40,.08);
+  }
+  .views button {
+    padding: 5px 11px; border-radius: 16px;
+    border: none;
+    background: transparent;
+    font-size: 11.5px; cursor: pointer;
+    font-family: inherit;
+    color: var(--text-soft);
+    transition: all .15s;
+  }
+  .views button:hover { background: var(--border-soft); }
+  .views button.on { background: var(--primary); color: #fff; }
+
+  .view { display: none; }
+  .view.on { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+
+  /* 表格（知识库）*/
+  .table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .table th {
+    text-align: left; padding: 9px 12px;
+    font-size: 11px; font-weight: 600;
+    color: var(--text-muted); text-transform: uppercase;
+    letter-spacing: .04em;
+    border-bottom: 1px solid var(--border);
+  }
+  .table td { padding: 12px; border-bottom: 1px solid var(--border-soft); }
+  .table tr:hover td { background: #fcfdff; }
+  .table .row-actions { text-align: right; opacity: 0; transition: opacity .15s; }
+  .table tr:hover .row-actions { opacity: 1; }
+
+  .badge-status {
+    font-size: 11px; padding: 2px 8px; border-radius: 4px;
+    background: var(--success-soft); color: var(--success); font-weight: 500;
+  }
+
+  /* 统计卡 */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 18px; }
+  .stat {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 16px;
+  }
+  .stat strong { display: block; font-size: 24px; font-weight: 700; letter-spacing: -.02em; }
+  .stat span { font-size: 11px; color: var(--text-muted); }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- ============ 侧边栏 ============ -->
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="brand-mark">标</div>
+      <div class="brand-copy">
+        <strong>标书工作台</strong>
+        <span>投标全流程助手</span>
+      </div>
+    </div>
+
+    <div class="project-switcher">
+      <span>测试投标项目</span>
+      <span style="opacity:.5">▾</span>
+    </div>
+
+    <nav class="nav">
+      <div class="nav-item active" data-view="bid">
+        <span class="nav-icon">◧</span>
+        <span class="nav-copy"><strong>内容生成</strong><small>标书与可研报告编制</small></span>
+      </div>
+      <div class="nav-item" data-view="settings-template">
+        <span class="nav-icon">▤</span>
+        <span class="nav-copy"><strong>模版设置</strong><small>导出模板与排版配置</small></span>
+      </div>
+      <div class="nav-item" data-view="kb">
+        <span class="nav-icon">▦</span>
+        <span class="nav-copy"><strong>知识库</strong><small>素材、模板和案例资产</small></span>
+      </div>
+      <div class="nav-item" data-view="check">
+        <span class="nav-icon">◈</span>
+        <span class="nav-copy"><strong>标书检查</strong><small>查重、废标项与合规检查</small></span>
+      </div>
+      <div class="nav-item" data-view="assets">
+        <span class="nav-icon">◫</span>
+        <span class="nav-copy"><strong>其他功能</strong><small>实用工具与产物下载</small></span>
+      </div>
+    </nav>
+
+    <div class="sidebar-footer">
+      <button class="footer-btn">说明</button>
+      <button class="footer-btn">设置</button>
+    </div>
+  </aside>
+
+  <!-- ============ 主区 ============ -->
+  <div class="main">
+
+    <!-- ---------- 视图 1：投标文件（STEP 04 目录）---------- -->
+    <div class="view on" id="view-bid">
+      <!-- 步骤条 -->
+      <div class="stepbar">
+        <div class="step done"><div class="step-dot">✓</div><div class="step-name">选择标书</div><div class="step-meta">4,182 字</div></div>
+        <div class="step done"><div class="step-dot">✓</div><div class="step-name">生成设置</div><div class="step-meta">7 项已配</div></div>
+        <div class="step done"><div class="step-dot">✓</div><div class="step-name">文件解析</div><div class="step-meta">16 项</div></div>
+        <div class="step active"><div class="step-dot">4</div><div class="step-name">目录生成</div><div class="step-meta">101 节点</div></div>
+        <div class="step"><div class="step-dot">5</div><div class="step-name">全局事实</div><div class="step-meta">待处理</div></div>
+        <div class="step"><div class="step-dot">6</div><div class="step-name">正文生成</div><div class="step-meta">0 / 101</div></div>
+        <div class="step"><div class="step-dot">7</div><div class="step-name">导出交付</div><div class="step-meta">—</div></div>
+      </div>
+
+      <div class="content">
+        <div class="page-head">
+          <div>
+            <h1>目录生成</h1>
+            <p>基于招标分析结果生成技术标目录，可增删改节点后进入正文生成。</p>
+          </div>
+          <button class="btn btn-primary">重新生成目录</button>
+        </div>
+
+        <div class="outline-layout">
+          <!-- 可折叠进度条 -->
+          <div class="outline-rail" title="查看生成日志">
+            <div class="ring"><span class="ring-label">100</span></div>
+            <div class="rail-text">生成日志</div>
+          </div>
+
+          <!-- 目录树 -->
+          <div class="outline-tree">
+            <div class="panel-head">
+              <div><strong>目录结构</strong><span class="count">101</span></div>
+              <div style="display:flex;gap:6px">
+                <button class="btn btn-sm btn-ghost">全部展开</button>
+                <button class="btn btn-sm">+ 添加一级目录</button>
+              </div>
+            </div>
+            <div class="tree-list">
+              <div class="tree-chapter active">▾ 第一章 编制说明与项目理解</div>
+              <div class="tree-section active">1.1 编制依据与编制原则 <span class="tag-done">3,776 字</span></div>
+              <div class="tree-section">1.2 项目概况与建设条件理解 <span class="tag-done">4,269 字</span></div>
+              <div class="tree-section">1.3 招标范围与合同边界认识 <span class="tag-done">4,703 字</span></div>
+              <div class="tree-section">1.4 技术标准与材料指标响应 <span class="tag-todo">待生成</span></div>
+              <div class="tree-section">1.5 技术标编制总体思路 <span class="tag-todo">待生成</span></div>
+              <div class="tree-chapter">▸ 第二章 施工组织设计总述</div>
+              <div class="tree-chapter">▸ 第三章 施工方案与技术措施</div>
+              <div class="tree-chapter">▸ 第四章 重点难点分析及对策</div>
+              <div class="tree-chapter">▸ 第五章 质量管理体系与措施</div>
+              <div class="tree-chapter">▸ 第六章 安全管理体系与措施</div>
+            </div>
+          </div>
+
+          <!-- 详情 -->
+          <div class="outline-detail">
+            <div class="panel-head">
+              <strong>1.1 编制依据与编制原则</strong>
+              <span class="tag-done">已生成</span>
+            </div>
+            <div class="detail-body">
+              <h2>编制说明</h2>
+              <p>本技术标依据招标文件及其组成部分、国家现行法律法规及部门规章、国家及行业技术标准规范进行编制，确保完全响应招标文件的各项要求。</p>
+              <h2>编制依据</h2>
+              <p>
+                （1）招标文件及其组成部分<br>
+                （2）国家现行法律法规及部门规章<br>
+                （3）国家及行业技术标准、规范，包括 GB 50300、GB 50204、GB 50203、GB 50210、GB 50242、GB 50303、GB 50243、GB 50411 等 8 部现行验收规范<br>
+                （4）其他编制资料：施工图纸、现场踏勘资料
+              </p>
+              <h2>编制原则</h2>
+              <p>
+                （1）完全响应原则：逐条对照招标文件要求，不遗漏任何强制性条款<br>
+                （2）针对性原则：结合本项目总建筑面积 18,600 ㎡、地上 6 层地下 1 层、540 日历天工期的具体特征编制<br>
+                （3）工期可控原则：关键线路明确，留有 20 天机动余量<br>
+                （4）质量精品原则：确保合格标准，力争市级优质工程
+              </p>
+            </div>
+            <div class="detail-actions">
+              <button class="btn btn-sm">编辑</button>
+              <button class="btn btn-sm">+ 添加子目录</button>
+              <button class="btn btn-sm btn-danger">删除</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 固定操作栏 -->
+      <div class="actionbar">
+        <div class="actionbar-left">
+          <button class="btn btn-ghost btn-sm">重置</button>
+          <button class="btn btn-ghost btn-sm">首页</button>
+        </div>
+        <div class="actionbar-right">
+          <button class="btn">← 上一步</button>
+          <button class="btn btn-primary">下一步 →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---------- 视图 2：生成设置（竖排页签）---------- -->
+    <div class="view" id="view-bid-settings">
+      <div class="stepbar">
+        <div class="step done"><div class="step-dot">✓</div><div class="step-name">选择标书</div><div class="step-meta">4,182 字</div></div>
+        <div class="step active"><div class="step-dot">2</div><div class="step-name">生成设置</div><div class="step-meta">3 / 7 已配</div></div>
+        <div class="step"><div class="step-dot">3</div><div class="step-name">文件解析</div><div class="step-meta">—</div></div>
+        <div class="step"><div class="step-dot">4</div><div class="step-name">目录生成</div><div class="step-meta">—</div></div>
+        <div class="step"><div class="step-dot">5</div><div class="step-name">全局事实</div><div class="step-meta">—</div></div>
+        <div class="step"><div class="step-dot">6</div><div class="step-name">正文生成</div><div class="step-meta">—</div></div>
+        <div class="step"><div class="step-dot">7</div><div class="step-name">导出交付</div><div class="step-meta">—</div></div>
+      </div>
+
+      <div class="content">
+        <div class="page-head">
+          <div>
+            <h1>生成设置</h1>
+            <p>配置生成范围、字数和模板。修改后自动保存，任务启动后锁定。</p>
+          </div>
+        </div>
+
+        <div class="split">
+          <div>
+            <div class="side-nav">
+              <div class="side-nav-item complete">生成范围 <span class="dot"></span></div>
+              <div class="side-nav-item">原方案参考 <span class="dot"></span></div>
+              <div class="side-nav-item complete">知识库引用 <span class="dot"></span></div>
+              <div class="side-nav-item active">字数控制 <span class="dot"></span></div>
+              <div class="side-nav-item">配图设置 <span class="dot"></span></div>
+              <div class="side-nav-item">生成策略 <span class="dot"></span></div>
+              <div class="side-nav-item complete">导出模板 <span class="dot"></span></div>
+            </div>
+            <div class="progress-mini">
+              <strong>3 / 7 已配置</strong>
+              <div class="progress-bar"><span style="width:43%"></span></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head" style="margin-bottom:18px">
+              <div>
+                <div class="card-title">字数控制</div>
+                <div class="card-desc">决定全文和每个小节的目标字数，影响 AI 生成的篇幅。</div>
+              </div>
+            </div>
+
+            <div class="grid-2">
+              <div class="field">
+                <label>全文最少字数</label>
+                <input type="text" value="30000">
+                <div class="field-hint">低于此值会触发补写</div>
+              </div>
+              <div class="field">
+                <label>每节目标字数</label>
+                <input type="text" value="1500">
+                <div class="field-hint">101 个节点预计 15 万字</div>
+              </div>
+            </div>
+
+            <div class="field" style="margin-bottom:0">
+              <label>字数超出处理</label>
+              <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+                <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:400;color:var(--text)">
+                  <input type="radio" name="wc" checked style="width:auto"> 直接保留，不做删减
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:400;color:var(--text)">
+                  <input type="radio" name="wc" style="width:auto"> 超出 20% 时自动精简
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="actionbar">
+        <div class="actionbar-left">
+          <button class="btn btn-ghost btn-sm">重置</button>
+          <button class="btn btn-ghost btn-sm">首页</button>
+        </div>
+        <div class="actionbar-right">
+          <button class="btn">← 上一步</button>
+          <button class="btn btn-primary">下一步 →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---------- 视图 3：知识库（表格化）---------- -->
+    <div class="view" id="view-kb">
+      <div class="content">
+        <div class="page-head">
+          <div>
+            <h1>文档知识库</h1>
+            <p>上传企业素材、资质证书、历史方案，生成内容时会自动引用。</p>
+          </div>
+          <button class="btn btn-primary">↑ 上传文档</button>
+        </div>
+
+        <div class="stats">
+          <div class="stat"><strong>1</strong><span>文档总数</span></div>
+          <div class="stat"><strong>5</strong><span>知识条目</span></div>
+          <div class="stat"><strong>12.4K</strong><span>总字数</span></div>
+          <div class="stat"><strong>1</strong><span>文件夹</span></div>
+        </div>
+
+        <div class="card" style="padding:0;overflow:hidden">
+          <div class="panel-head">
+            <div style="display:flex;gap:6px">
+              <button class="btn btn-sm btn-primary">全部</button>
+              <button class="btn btn-sm btn-ghost">已完成</button>
+              <button class="btn btn-sm btn-ghost">解析中</button>
+            </div>
+            <input type="text" placeholder="搜索文档名" style="width:200px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:12px;font-family:inherit">
+          </div>
+          <table class="table">
+            <thead>
+              <tr>
+                <th style="width:44%">文档名称</th>
+                <th>文件夹</th>
+                <th>状态</th>
+                <th>字数</th>
+                <th>更新时间</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>技术方案测试.md</strong></td>
+                <td>医疗行业素材</td>
+                <td><span class="badge-status">已完成</span></td>
+                <td>5 条知识</td>
+                <td>2026-11-14</td>
+                <td class="row-actions">
+                  <button class="btn btn-sm btn-ghost">编辑</button>
+                  <button class="btn btn-sm btn-danger">删除</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="empty" style="padding:36px 24px">
+            <div class="empty-icon">＋</div>
+            <h3>上传更多素材</h3>
+            <p>知识库越完整，AI 生成的内容越贴合你的企业实际情况。</p>
+            <button class="btn btn-primary">选择文件上传</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---------- 视图 4：模板（空态重构）---------- -->
+    <div class="view" id="view-settings-template">
+      <div class="content">
+        <div class="page-head">
+          <div>
+            <h1>导出模板</h1>
+            <p>配置 Word 导出的纸张、页边距、字体和表格样式。</p>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn">从系统模板复制</button>
+            <button class="btn btn-primary">+ 新建模板</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <div class="card-title">系统预置模板</div>
+              <div class="card-desc">开箱可用，复制后可按需修改。</div>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+            <div class="card" style="margin:0;padding:16px;cursor:pointer">
+              <div style="font-weight:650;margin-bottom:4px">标准投标模板</div>
+              <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">宋体小四，1.5 倍行距，A4</div>
+              <button class="btn btn-sm">复制使用</button>
+            </div>
+            <div class="card" style="margin:0;padding:16px;cursor:pointer">
+              <div style="font-weight:650;margin-bottom:4px">政府项目模板</div>
+              <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">仿宋三号，固定行距 28 磅</div>
+              <button class="btn btn-sm">复制使用</button>
+            </div>
+            <div class="card" style="margin:0;padding:16px;cursor:pointer">
+              <div style="font-weight:650;margin-bottom:4px">暗标专用模板</div>
+              <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">无页眉页脚，无企业标识</div>
+              <button class="btn btn-sm">复制使用</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <div class="card-title">我的模板</div>
+              <div class="card-desc">还没有自定义模板。</div>
+            </div>
+          </div>
+          <div style="text-align:center;padding:32px 0;color:var(--text-muted);font-size:13px">
+            复制上面的系统模板，或新建一个从头配置
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---------- 视图 5：产物库 ---------- -->
+    <div class="view" id="view-assets">
+      <div class="content">
+        <div class="page-head">
+          <div>
+            <h1>产物库</h1>
+            <p>生成的 Word 文档、配图和其他产物都保存在这里。</p>
+          </div>
+          <button class="btn">刷新</button>
+        </div>
+
+        <div class="stats">
+          <div class="stat"><strong>31</strong><span>个产物</span></div>
+          <div class="stat"><strong>123.2 KB</strong><span>总大小</span></div>
+          <div class="stat"><strong>0</strong><span>张配图</span></div>
+          <div class="stat"><strong>19</strong><span>过程文件</span></div>
+        </div>
+
+        <div class="card" style="padding:0;overflow:hidden">
+          <table class="table">
+            <thead>
+              <tr><th style="width:52%">文件名</th><th>类型</th><th>大小</th><th>时间</th><th></th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>某某产业园区综合服务中心建设项目_技术方案_20261115.docx</strong></td>
+                <td>Word</td><td>18.6 KB</td><td>25 分钟前</td>
+                <td class="row-actions">
+                  <button class="btn btn-sm btn-icon" title="下载">↓</button>
+                  <button class="btn btn-sm btn-icon" title="更多">⋯</button>
+                </td>
+              </tr>
+              <tr>
+                <td>1.1 编制依据与编制原则.md</td>
+                <td>正文</td><td>11.6 KB</td><td>37 分钟前</td>
+                <td class="row-actions">
+                  <button class="btn btn-sm btn-icon" title="下载">↓</button>
+                  <button class="btn btn-sm btn-icon" title="更多">⋯</button>
+                </td>
+              </tr>
+              <tr>
+                <td>1.2 项目概况与建设条件理解.md</td>
+                <td>正文</td><td>10.1 KB</td><td>37 分钟前</td>
+                <td class="row-actions">
+                  <button class="btn btn-sm btn-icon" title="下载">↓</button>
+                  <button class="btn btn-sm btn-icon" title="更多">⋯</button>
+                </td>
+              </tr>
+              <tr>
+                <td>scoringCriteria.md</td>
+                <td>分析</td><td>2.4 KB</td><td>58 分钟前</td>
+                <td class="row-actions">
+                  <button class="btn btn-sm btn-icon" title="下载">↓</button>
+                  <button class="btn btn-sm btn-icon" title="更多">⋯</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---------- 视图 6：检查结果（无重复）---------- -->
+    <div class="view" id="view-check">
+      <div class="content">
+        <div class="page-head">
+          <div>
+            <h1>查重结果</h1>
+            <p>比对投标文件之间的重复段落，已自动排除引用招标文件的句子。</p>
+          </div>
+        </div>
+
+        <div class="card" style="border-left:3px solid var(--success)">
+          <div style="display:flex;align-items:flex-start;gap:14px">
+            <div style="width:40px;height:40px;border-radius:10px;background:var(--success-soft);color:var(--success);display:grid;place-items:center;font-size:20px;flex-shrink:0">✓</div>
+            <div style="flex:1">
+              <div style="font-size:15px;font-weight:650;margin-bottom:4px">未发现重复句子</div>
+              <div style="font-size:13px;color:var(--text-soft);line-height:1.7">
+                已检查元数据、目录、正文、图片四个维度，未发现与其他投标文件重复的内容。
+              </div>
+              <div style="display:flex;gap:8px;margin-top:14px">
+                <button class="btn btn-sm">导出 Excel 报告</button>
+                <button class="btn btn-sm">重新检查</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title" style="margin-bottom:12px">检查维度</div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+            <div style="padding:12px;background:var(--bg);border-radius:8px">
+              <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">元数据</div>
+              <div style="font-weight:650;color:var(--success)">已完成</div>
+            </div>
+            <div style="padding:12px;background:var(--bg);border-radius:8px">
+              <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">目录</div>
+              <div style="font-weight:650;color:var(--success)">已完成</div>
+            </div>
+            <div style="padding:12px;background:var(--bg);border-radius:8px">
+              <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">正文</div>
+              <div style="font-weight:650;color:var(--success)">已完成</div>
+            </div>
+            <div style="padding:12px;background:var(--bg);border-radius:8px">
+              <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">图片</div>
+              <div style="font-weight:650;color:var(--success)">已完成</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- 视图切换 -->
+<div class="views">
+  <button data-target="view-bid" class="on">目录页</button>
+  <button data-target="view-bid-settings">生成设置</button>
+  <button data-target="view-kb">知识库</button>
+  <button data-target="view-settings-template">模板</button>
+  <button data-target="view-assets">产物库</button>
+  <button data-target="view-check">查重结果</button>
+</div>
+
+<script>
+  // 视图切换
+  document.querySelectorAll('.views button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.views button').forEach(b => b.classList.remove('on'));
+      btn.classList.add('on');
+      document.querySelectorAll('.view').forEach(v => v.classList.remove('on'));
+      document.getElementById(btn.dataset.target).classList.add('on');
+    });
+  });
+
+  // 侧栏导航联动
+  document.querySelectorAll('.nav-item').forEach(item => {
+    item.addEventListener('click', () => {
+      document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+      item.classList.add('active');
+      const map = { 'bid': 'view-bid', 'kb': 'view-kb', 'assets': 'view-assets', 'check': 'view-check', 'settings-template': 'view-settings-template' };
+      const target = map[item.dataset.view];
+      if (target) document.getElementById(target).classList.add('on');
+      document.querySelectorAll('.view').forEach(v => { if (v.id !== target) v.classList.remove('on'); });
+    });
+  });
+
+  // 目录树章节展开
+  document.querySelectorAll('.tree-chapter').forEach(ch => {
+    ch.addEventListener('click', () => {
+      document.querySelectorAll('.tree-chapter').forEach(c => c.classList.remove('active'));
+      ch.classList.add('active');
+    });
+  });
+
+  // 侧栏折叠（点 brand-mark）
+  document.querySelector('.brand-mark').addEventListener('click', () => {
+    document.getElementById('sidebar').classList.toggle('collapsed');
+  });
+</script>
+</body>
+</html>

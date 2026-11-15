@@ -238,6 +238,16 @@ function OutlineEditPage({
   const [editDescription, setEditDescription] = useState('');
   const [startingOutline, setStartingOutline] = useState(false);
   const [progressCollapsed, setProgressCollapsed] = useState(false);
+  /**
+   * 左侧「生成过程」整栏是否收起。
+   *
+   * 为什么需要：这一栏占 300px，但只有任务运行时才有内容，
+   * 其余时间是「等待生成任务启动」的空框。开着它等于白占
+   * 20% 宽度，把真正的目录树挤在中间。
+   *
+   * 收起后只留 48px 竖条（进度环 + 竖排文字），点击展开。
+   */
+  const [progressRailCollapsed, setProgressRailCollapsed] = useState(true);
   const [noScoreConfirmationOpen, setNoScoreConfirmationOpen] = useState(false);
   const [localStartAt, setLocalStartAt] = useState<number | null>(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
@@ -813,8 +823,36 @@ function OutlineEditPage({
         </div>
       </section>
 
-      <section className="outline-generation-workspace">
+      <section className={`outline-generation-workspace${progressRailCollapsed ? ' is-rail-collapsed' : ''}`}>
         <aside className="outline-progress-panel">
+          {progressRailCollapsed ? (
+            /* 收起态：只留进度环和竖排提示，点击展开 */
+            <button
+              type="button"
+              className="outline-progress-rail"
+              onClick={() => setProgressRailCollapsed(false)}
+              title="展开生成过程"
+              aria-label="展开生成过程"
+            >
+              <span
+                className="rail-ring"
+                style={{ '--rail-progress': String(progress) } as CSSProperties}
+              >
+                <em>{progress}</em>
+              </span>
+              <span className="rail-text">生成过程</span>
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="outline-progress-collapse"
+                onClick={() => setProgressRailCollapsed(true)}
+                title="收起生成过程"
+                aria-label="收起生成过程"
+              >
+                ‹
+              </button>
           <div className="analysis-result-head">
             <strong>生成过程</strong>
             <span>{statusText}</span>
@@ -839,11 +877,13 @@ function OutlineEditPage({
               </div>
             )}
           </div>
-          <div className="outline-progress-log" ref={logListRef}>
-            {progressLogs.length ? progressLogs.map((item, index) => (
-              <p className={index === progressLogs.length - 1 ? 'is-latest' : ''} key={`${item}-${index}`}>{item}</p>
-            )) : <p>等待生成任务启动。</p>}
-          </div>
+              <div className="outline-progress-log" ref={logListRef}>
+                {progressLogs.length ? progressLogs.map((item, index) => (
+                  <p className={index === progressLogs.length - 1 ? 'is-latest' : ''} key={`${item}-${index}`}>{item}</p>
+                )) : <p>等待生成任务启动。</p>}
+              </div>
+            </>
+          )}
         </aside>
 
         <section className="outline-tree-panel">

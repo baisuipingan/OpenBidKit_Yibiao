@@ -10,6 +10,7 @@ import { useTechnicalPlanWorkflow } from '../hooks/useTechnicalPlanWorkflow';
 import { generationSettingsTabs, type GenerationSettingsTab } from '../generationSettingsTabs';
 import { bidAnalysisTasks, getRequiredBidAnalysisTasks, isMissingBidAnalysisResult, isMissingTechnicalScoreItems } from '../services/bidAnalysisWorkflow';
 import { trackPageView } from '../../../shared/analytics/analytics';
+import ProcessStepBar from '../../../shared/ui/ProcessStepBar';
 import { AppDialog, FloatingToolbar, ProgressBar, ToolbarArrowLeftIcon, ToolbarArrowRightIcon, ToolbarDocumentIcon, ToolbarSparkleIcon, useToast } from '../../../shared/ui';
 import type { BackgroundTaskState, BidAnalysisTasks, BidTemplateInspection, BusinessFillReviewSubmission, ContentGenerationOptions, GlobalFactGroupState, GlobalFactsMode, SaveOutlineRequest, SaveOutlineSelectionRequest, TechnicalPlanState, TechnicalPlanStep } from '../types';
 import type { TechnicalPlanOutlineData as OutlineData, TechnicalPlanOutlineItem as OutlineItem, OutlineMode, OutlineWordControlOptions, WordExportProgressEvent } from '../../../shared/types';
@@ -62,6 +63,11 @@ const stepLabels: Record<TechnicalPlanStep, string> = {
   'content-edit': '生成正文',
   expand: '扩写改写',
 };
+
+/** 递归统计目录节点总数（含所有层级）。 */
+function countOutlineNodes(items: OutlineItem[]): number {
+  return items.reduce((sum, item) => sum + 1 + countOutlineNodes(item.children || []), 0);
+}
 
 function collectLeafItems(items: OutlineItem[]): OutlineItem[] {
   return items.flatMap((item) => item.children?.length ? collectLeafItems(item.children) : [item]);
@@ -207,6 +213,58 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   const steps = skipGlobalFacts ? technicalPlanSteps.filter((step) => step !== 'global-facts') : technicalPlanSteps;
   const activeIndex = Math.max(0, steps.indexOf(state.step));
   const activeStepNumber = String(activeIndex + 1).padStart(2, '0');
+
+  /**
+   * 步骤条数据。
+   *
+   * meta 显示每步的关键结果，让用户不点进去也知道进度：
+   *   选择标书 → 文件字数
+   *   文件解析 → 已完成项数
+   *   目录生成 → 节点数
+   *   生成正文 → 已生成章节数
+   *
+   * expand（扩写改写）不是线性流程的一环，从步骤条里排除。
+   */
+  const processSteps = steps
+    .filter((step) => step !== 'expand')
+    .map((step) => {
+      const label = stepLabels[step];
+      let meta = '';
+      let status: 'done' | 'active' | 'pending' | 'error' | undefined;
+      let errorText = '';
+
+      if (step === 'document-analysis') {
+        // 字数在 tenderFiles 上，不在 tenderFile 上
+        const chars = (state.tenderFiles || [])[0]?.markdownChars || 0;
+        meta = chars > 0 ? `${chars.toLocaleString()} 字` : '';
+      } else if (step === 'bid-analysis') {
+        const taskList = Object.values(state.bidAnalysisTasks || {});
+        const doneCount = taskList.filter((t) => t.status === 'success').length;
+        meta = doneCount > 0 ? `${doneCount} 项` : '';
+        if (state.bidAnalysisTask?.status === 'error') {
+          status = 'error';
+          errorText = '解析失败';
+        }
+      } else if (step === 'outline-generation') {
+        const nodeCount = countOutlineNodes(state.outlineData?.outline || []);
+        meta = nodeCount > 0 ? `${nodeCount} 节点` : '';
+        if (state.outlineGenerationTask?.status === 'error') {
+          status = 'error';
+          errorText = '生成失败';
+        }
+      } else if (step === 'content-edit') {
+        const leafCount = collectLeafItems(state.outlineData?.outline || []).length;
+        const doneCount = Object.values(state.contentGenerationSections || {}).filter((s) => s.status === 'success').length;
+        meta = leafCount > 0 ? `${doneCount} / ${leafCount}` : '';
+      } else if (step === 'generation-settings') {
+        meta = '已配置';
+      } else if (step === 'global-facts') {
+        const factCount = Array.isArray(state.globalFacts) ? state.globalFacts.length : 0;
+        meta = factCount > 0 ? `${factCount} 条` : '';
+      }
+
+      return { key: step, label, meta, status, errorText };
+    });
   const requiredBidAnalysisReady = areRequiredBidAnalysisTasksReady(state.bidAnalysisTasks, state.outlineMode);
   const isBidSectionExtractionRunning = state.bidSectionExtractionTask?.status === 'running' || state.bidSectionExtractionTask?.status === 'pausing';
   const isBidAnalysisTaskRunning = state.bidAnalysisTask?.status === 'running' || state.bidAnalysisTask?.status === 'pausing';
@@ -815,11 +873,11 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
     }
   };
 
-  // 使用“长嘛样”保存的模板直接导出，不再临时改选。
+  // 使用「导出模板」中保存的模板直接导出，不再临时改选。
   const exportWordWithConfiguredTemplate = async () => {
     const templateId = state.exportTemplateId.trim();
     if (!templateId) {
-      showToast('请先到生成设置的“长嘛样”选择导出模板', 'info');
+      showToast('请先到「生成设置 → 导出模板」选择模板', 'info');
       return;
     }
     await runExportWord();
@@ -1152,7 +1210,20 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
   ];
 
   return (
-    <div className="page-stack technical-workbench">
+    <div className="page-stack technical-workbench has-page-toolbar">
+      {/* 全局步骤条：始终显示，让用户知道总进度。
+          expand 是扩写改写（从正文页进入的子流程），不属于主链路，故排除。 */}
+      {state.step !== 'expand' && (
+        <ProcessStepBar
+          steps={processSteps}
+          currentKey={state.step}
+          disabled={isResetting}
+          onStepClick={(key: string) => {
+            void switchStep(key as TechnicalPlanStep);
+          }}
+        />
+      )}
+
       {state.step === 'document-analysis' && (
         <DocumentAnalysisPage
           tenderFile={state.tenderFile}

@@ -3,10 +3,43 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>易标投标工具箱</title>
+    <title>标书工作台</title>
   </head>
   <body>
     <div id="root"></div>
+    <!--
+      Web 版 bridge 注入：在 main.tsx 之前挂载 window.yibiao。
+      桌面版运行时 window.yibiao 已由 preload 注入，install() 会直接返回 desktop。
+      强制 mock 调试：URL 加 ?mock=1
+    -->
+    <script type="module">
+      // bridge 注入必须早于应用渲染：前端有 147 处直接调 window.yibiao.xxx
+      // （桌面版遗留写法，没有 ?. 保护），注入失败会连锁崩溃。
+      // 所以这里兜住异常，失败时仍挂一个最小 shim，让应用能显示错误页而不是白屏。
+      try {
+        const { install } = await import('/src/shared/bridge/index.ts');
+        const mode = await install();
+        if (mode !== 'desktop') console.info('[bridge] 运行模式:', mode);
+      } catch (error) {
+        console.error('[bridge] 初始化失败，已挂载降级 shim', error);
+        // 最小 shim：任何方法调用都返回 rejected Promise，
+        // 页面能正常渲染并提示错误，而不是白屏。
+        const fail = () => Promise.reject(new Error('服务连接失败，请刷新页面重试'));
+        const shim = new Proxy({}, {
+          get(_t, prop) {
+            if (prop === 'appName') return '标书工作台';
+            if (prop === 'platform') return 'web';
+            return new Proxy(fail, {
+              get(_t2, p2) {
+                if (typeof p2 === 'string' && /^on[A-Z]/.test(p2)) return () => () => {};
+                return fail;
+              },
+            });
+          },
+        });
+        window.yibiao = shim;
+      }
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
