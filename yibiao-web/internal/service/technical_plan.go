@@ -138,12 +138,14 @@ type PlanState struct {
 	OutlineMode                string         `json:"outlineMode"`
 	OutlineExpansionMode       string         `json:"outlineExpansionMode"`
 	OutlineWordControlOptions  map[string]any `json:"outlineWordControlOptions"`
+	OutlineGenerationTask      map[string]any `json:"outlineGenerationTask"`
 	ReferenceKnowledgeIDs      []string       `json:"referenceKnowledgeDocumentIds"`
 	GlobalFactsMode            string         `json:"globalFactsMode"`
 	GlobalFacts                []any          `json:"globalFacts"`
 	ExportTemplateID           string         `json:"exportTemplateId"`
 	ExportTemplateScope        string         `json:"exportTemplateScope"`
 	ContentGenerationOptions   map[string]any `json:"contentGenerationOptions"`
+	ContentGenerationTask      map[string]any `json:"contentGenerationTask"`
 	ContentGenerationSections  map[string]any `json:"contentGenerationSections"`
 	// ContentGenerationRuntime 是正文生成运行时状态。
 	// 前端从这里读 section_words 显示每节字数。
@@ -352,6 +354,8 @@ func toPlanState(
 		BidAnalysisTasks:          map[string]any{},
 		BidAnalysisSelectedIDs:    []string{},
 		BidAnalysisTask:           nil,
+		OutlineGenerationTask:     nil,
+		ContentGenerationTask:     nil,
 		ReferenceKnowledgeIDs:     append([]string{}, meta.ReferenceKnowledgeDocumentIds...),
 		GlobalFacts:               []any{},
 		ContentGenerationSections: map[string]any{},
@@ -426,6 +430,12 @@ func toPlanState(
 			}
 			if v, ok := extra["bidAnalysisTask"].(map[string]any); ok {
 				st.BidAnalysisTask = v
+			}
+			if v, ok := extra["outlineGenerationTask"].(map[string]any); ok {
+				st.OutlineGenerationTask = v
+			}
+			if v, ok := extra["contentGenerationTask"].(map[string]any); ok {
+				st.ContentGenerationTask = v
 			}
 			if v, ok := extra["bidAnalysisProgress"].(float64); ok {
 				st.BidAnalysisProgress = int(v)
@@ -583,8 +593,10 @@ func buildContentRuntime(nodes []store.TechnicalPlanOutlineNode) map[string]any 
 // 数据库存的是平铺列表（parent_node_id + sort_order），
 // 前端要的是嵌套 children 结构。
 func buildOutlineData(nodes []store.TechnicalPlanOutlineNode) *OutlineData {
+	// 空目录必须返回 nil：前端用 outlineData 真值判断「已生成」，
+	// 空对象会让进度条显示 100% 且 0 章。
 	if len(nodes) == 0 {
-		return &OutlineData{Outline: []OutlineItem{}}
+		return nil
 	}
 
 	// 建索引

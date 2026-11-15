@@ -243,30 +243,76 @@ func New(d Deps) *echo.Echo {
 	outlineRunner := outline.NewRunner(agentSvc, artifactSvc, d.Logger)
 	// 目录产物入库后写进节点表，否则前端目录页拿不到数据。
 	outlineRunner.SetOnOutlineDone(func(ctx context.Context, tenantID, projectID, taskID string, succeeded bool) {
-		if _, err := tpSvc.SyncOutlineFromArtifacts(ctx, tenantID, projectID, taskID, artifactSvc, d.Logger); err != nil {
+		n, err := tpSvc.SyncOutlineFromArtifacts(ctx, tenantID, projectID, taskID, artifactSvc, d.Logger)
+		if err != nil {
 			d.Logger.Warn("目录回写失败", slog.String("task_id", taskID), slog.String("error", err.Error()))
 		}
-		if taskH != nil {
-			if succeeded {
-				taskH.MarkDone(taskID, "success")
-			} else {
-				taskH.MarkDone(taskID, "error")
+		status := "success"
+		if !succeeded || err != nil || n == 0 {
+			status = "error"
+			msg := "目录生成失败：未得到有效目录"
+			if err != nil {
+				msg = "目录生成失败：" + err.Error()
+			}
+			if markErr := tpSvc.MarkOutlineFailed(ctx, tenantID, projectID, taskID, msg); markErr != nil {
+				d.Logger.Warn("写入目录失败状态失败", slog.String("error", markErr.Error()))
 			}
 		}
+		if taskH != nil {
+			taskH.MarkDone(taskID, status)
+		}
+		// 推送最终任务事件 + outlineData，让页面立刻离开「等待生成任务启动」
+		state, loadErr := tpSvc.LoadState(ctx, tenantID, projectID)
+		if loadErr != nil {
+			d.Logger.Warn("目录完成后读状态失败", slog.String("error", loadErr.Error()))
+			return
+		}
+		taskPayload := state.OutlineGenerationTask
+		if taskPayload == nil {
+			taskPayload = map[string]any{"task_id": taskID, "type": "outline-generation", "status": status, "progress": 100}
+		}
+		d.Bus.Publish("task", events.Scope{TenantID: tenantID, ProjectID: projectID}, map[string]any{
+			"task": taskPayload,
+			"technicalPlanPatch": map[string]any{
+				"outlineGenerationTask": taskPayload,
+				"outlineData":           state.OutlineData,
+			},
+		})
 	})
 	contentRunner := content.NewRunner(agentSvc, artifactSvc, d.Logger)
 	// 正文产物入库后写进节点表，否则前端看不到生成内容。
 	contentRunner.SetOnContentDone(func(ctx context.Context, tenantID, projectID, taskID string, succeeded bool) {
-		if _, err := tpSvc.SyncContentFromArtifacts(ctx, tenantID, projectID, taskID, artifactSvc, d.Logger); err != nil {
+		n, err := tpSvc.SyncContentFromArtifacts(ctx, tenantID, projectID, taskID, artifactSvc, d.Logger)
+		if err != nil {
 			d.Logger.Warn("正文回写失败", slog.String("task_id", taskID), slog.String("error", err.Error()))
 		}
-		if taskH != nil {
-			if succeeded {
-				taskH.MarkDone(taskID, "success")
-			} else {
-				taskH.MarkDone(taskID, "error")
-			}
+		status := "success"
+		if !succeeded || err != nil || n == 0 {
+			status = "error"
 		}
+		if taskH != nil {
+			taskH.MarkDone(taskID, status)
+		}
+		state, loadErr := tpSvc.LoadState(ctx, tenantID, projectID)
+		if loadErr != nil {
+			return
+		}
+		taskPayload := state.ContentGenerationTask
+		if taskPayload == nil {
+			taskPayload = map[string]any{"task_id": taskID, "type": "content-generation", "status": status}
+		} else {
+			taskPayload["status"] = status
+			taskPayload["task_id"] = taskID
+			taskPayload["type"] = "content-generation"
+		}
+		d.Bus.Publish("task", events.Scope{TenantID: tenantID, ProjectID: projectID}, map[string]any{
+			"task": taskPayload,
+			"technicalPlanPatch": map[string]any{
+				"contentGenerationTask":     taskPayload,
+				"contentGenerationSections": state.ContentGenerationSections,
+				"contentGenerationRuntime":  state.ContentGenerationRuntime,
+			},
+		})
 	})
 	consistencyRunner := consistency.NewRunner(agentSvc, d.Logger)
 

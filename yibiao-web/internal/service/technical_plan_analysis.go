@@ -311,6 +311,9 @@ func (s *TechnicalPlanService) SyncOutlineFromArtifacts(
 	}
 
 	total := countOutlineNodes(nodes)
+	if err := s.PersistOutlineGenerationSuccess(ctx, tenantID, projectID, taskID, total); err != nil {
+		log.Warn("写入目录成功状态失败", slog.String("error", err.Error()))
+	}
 	log.Info("目录已写进节点表",
 		slog.String("task_id", taskID),
 		slog.Int("nodes", total),

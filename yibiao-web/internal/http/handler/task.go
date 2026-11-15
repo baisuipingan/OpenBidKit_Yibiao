@@ -192,11 +192,34 @@ func (t *Task) StartOutlineGeneration(c echo.Context) error {
 
 	onEvent := func(ev agent.TaskEvent) {
 		mu.Lock()
-		defer mu.Unlock()
 		events = append(events, ev.Data)
 		if len(events) > 1500 {
 			events = events[len(events)-1000:]
 		}
+		tid := owner
+		mu.Unlock()
+		if tid == "" {
+			return
+		}
+		// 原始事件附带 technicalPlanPatch，否则 TechnicalPlanHome 会直接忽略
+		t.publishTask(tenantID, userID, projectID, map[string]any{
+			"task": map[string]any{
+				"task_id":  tid,
+				"type":     "outline-generation",
+				"status":   "running",
+				"progress": 15,
+			},
+			"technicalPlanPatch": map[string]any{
+				"outlineGenerationTask": map[string]any{
+					"task_id":  tid,
+					"type":     "outline-generation",
+					"status":   "running",
+					"progress": 15,
+					"logs":     []string{"目录生成进行中"},
+				},
+			},
+			"agentEvent": json.RawMessage(ev.Data),
+		})
 	}
 
 	result, err := t.outline.Start(c.Request().Context(), outline.StartOptions{
@@ -214,9 +237,9 @@ func (t *Task) StartOutlineGeneration(c echo.Context) error {
 		return httpx.Internal(err)
 	}
 
-	owner = result.TaskID
 	mu.Lock()
-	buffered := events
+	owner = result.TaskID
+	buffered := append([]json.RawMessage(nil), events...)
 	mu.Unlock()
 
 	t.mu.Lock()
@@ -229,11 +252,31 @@ func (t *Task) StartOutlineGeneration(c echo.Context) error {
 	}
 	t.mu.Unlock()
 
+	if persistErr := t.tpSvc.PersistOutlineGenerationStart(
+		c.Request().Context(), tenantID, projectID, result.TaskID,
+	); persistErr != nil && t.logger != nil {
+		t.logger.Warn("写入目录启动状态失败: " + persistErr.Error())
+	}
+
 	// 同步更新技术方案步骤，让前端知道进入了目录阶段
 	if err := t.planSvc.UpdateStep(c.Request().Context(), tenantID, projectID, "outline-generation"); err != nil {
 		// 步骤更新失败不影响任务本身
 		c.Logger().Warnf("更新步骤失败: %v", err)
 	}
+
+	runningTask := map[string]any{
+		"task_id":  result.TaskID,
+		"type":     "outline-generation",
+		"status":   "running",
+		"progress": 5,
+		"logs":     []string{"目录生成任务已启动"},
+	}
+	t.publishTask(tenantID, userID, projectID, map[string]any{
+		"task": runningTask,
+		"technicalPlanPatch": map[string]any{
+			"outlineGenerationTask": runningTask,
+		},
+	})
 
 	return httpx.OK(c, map[string]any{
 		"taskId": result.TaskID,
@@ -741,10 +784,44 @@ func (t *Task) StartContentGeneration(c echo.Context) error {
 		return httpx.Fail(c, "TASK_FAILED", err.Error())
 	}
 
+	mu.Lock()
+	buffered := append([]json.RawMessage(nil), events...)
+	mu.Unlock()
+	t.mu.Lock()
+	t.tasks[result.TaskID] = &taskRecord{
+		TaskID:    result.TaskID,
+		Type:      "content-generation",
+		Status:    "running",
+		Events:    buffered,
+		StartedAt: time.Now(),
+	}
+	t.mu.Unlock()
+
+	runningTask := map[string]any{
+		"task_id":  result.TaskID,
+		"type":     "content-generation",
+		"status":   "running",
+		"progress": 5,
+		"logs":     []string{"正文生成任务已启动"},
+	}
+	if persistErr := t.tpSvc.PersistContentGenerationStart(
+		c.Request().Context(), tenantID, projectID, result.TaskID,
+	); persistErr != nil && t.logger != nil {
+		t.logger.Warn("写入正文启动状态失败: " + persistErr.Error())
+	}
+	t.publishTask(tenantID, userID, projectID, map[string]any{
+		"task": runningTask,
+		"technicalPlanPatch": map[string]any{
+			"contentGenerationTask": runningTask,
+		},
+	})
+
 	return httpx.OK(c, map[string]any{
 		"success":      true,
 		"taskId":       result.TaskID,
 		"sectionCount": result.SectionCount,
+		"type":         "content-generation",
+		"status":       "running",
 	})
 }
 
