@@ -198,8 +198,41 @@ func New(d Deps) *echo.Echo {
 	// 分析产物入库后回写到 technical_plan_meta，
 	// 否则前端 loadState 拿不到分析结果。
 	bidRunner.SetOnAnalysisDone(func(ctx context.Context, tenantID, projectID, taskID string, succeeded bool) {
-		if _, err := tpSvc.SyncBidAnalysisFromArtifacts(ctx, tenantID, projectID, taskID, artifactSvc, d.Logger); err != nil {
+		n, err := tpSvc.SyncBidAnalysisFromArtifacts(ctx, tenantID, projectID, taskID, artifactSvc, d.Logger)
+		if err != nil {
 			d.Logger.Warn("分析结果回写失败", slog.String("task_id", taskID), slog.String("error", err.Error()))
+		}
+		if !succeeded || n == 0 {
+			msg := "招标文件解析失败：模型未返回有效结果（请检查文本模型 Base URL / API Key / 额度）"
+			if markErr := tpSvc.MarkBidAnalysisFailed(ctx, tenantID, projectID, taskID, msg); markErr != nil {
+				d.Logger.Warn("写入招标分析失败状态失败", slog.String("error", markErr.Error()))
+			}
+		}
+		// 推送最终任务事件，让仍连着 SSE 的页面立刻刷新；
+		// 未连上的页面靠 load-state 里的 bidAnalysisTask / bidAnalysisTasks。
+		if runtime, loadErr := tpSvc.LoadBidAnalysisRuntime(ctx, tenantID, projectID); loadErr == nil {
+			status := "success"
+			if !succeeded || n == 0 {
+				status = "error"
+			}
+			taskPayload, _ := runtime["bidAnalysisTask"].(map[string]any)
+			if taskPayload == nil {
+				taskPayload = map[string]any{"task_id": taskID, "type": "bid-analysis", "status": status}
+			} else {
+				taskPayload["status"] = status
+				taskPayload["task_id"] = taskID
+				taskPayload["type"] = "bid-analysis"
+			}
+			d.Bus.Publish("task", events.Scope{TenantID: tenantID, ProjectID: projectID}, map[string]any{
+				"task": taskPayload,
+				"technicalPlanPatch": map[string]any{
+					"bidAnalysisTask":     taskPayload,
+					"bidAnalysisTasks":    runtime["bidAnalysisTasks"],
+					"bidAnalysisProgress": runtime["bidAnalysisProgress"],
+					"projectOverview":     runtime["projectOverview"],
+					"techRequirements":    runtime["techRequirements"],
+				},
+			})
 		}
 	})
 	outlineRunner := outline.NewRunner(agentSvc, artifactSvc, d.Logger)
@@ -280,7 +313,7 @@ func New(d Deps) *echo.Echo {
 	// AI 连通性测试（设置页「测试」按钮）
 	aiH := handler.NewAI(settingsSvc)
 	outlineH := handler.NewOutline(outlineRunner, tpSvc)
-	taskH := handler.NewTask(tpSvc, outlineRunner, bidRunner, contentRunner, settingsSvc, artifactSvc)
+	taskH := handler.NewTask(tpSvc, outlineRunner, bidRunner, contentRunner, settingsSvc, artifactSvc, d.Bus)
 	contentH := handler.NewContent(contentRunner, tpSvc, settingsSvc)
 
 	consistencyH := handler.NewConsistency(consistencyRunner, tpSvc, settingsSvc)

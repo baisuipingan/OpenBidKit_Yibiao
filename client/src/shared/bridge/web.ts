@@ -1011,20 +1011,9 @@ const NS_LOCAL: Record<string, (...args: any[]) => unknown> = {
    */
   'technicalPlan.saveGenerationConfig': (payload: unknown) => {
     const p = (payload || {}) as Record<string, any>;
-
-    // 目前只实现了参考知识库这一个字段
-    if (Array.isArray(p.referenceKnowledgeDocumentIds)) {
-      return request('/technical-plan/save-reference-knowledge', {
-        documentIds: p.referenceKnowledgeDocumentIds,
-      }).then(() => ({
-        // 前端会读 saved.referenceKnowledgeDocumentIds，原样回传
-        referenceKnowledgeDocumentIds: p.referenceKnowledgeDocumentIds,
-      }));
-    }
-
-    // 其他字段暂不支持，返回空对象让前端不报错
-    console.warn('[bridge] saveGenerationConfig 暂不支持的字段:', Object.keys(p));
-    return Promise.resolve({});
+    // 统一走后端 save-generation-config：局部字段合并后回传完整配置，
+    // 避免返回 {} 导致 TechnicalPlanHome 把 outlineMode 等写成 undefined 白屏。
+    return request('/technical-plan/save-generation-config', p);
   },
 
   /**

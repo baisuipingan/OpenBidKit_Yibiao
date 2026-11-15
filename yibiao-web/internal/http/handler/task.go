@@ -8,6 +8,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
+	"github.com/patrick/yibiao-web/internal/events"
 	"github.com/patrick/yibiao-web/internal/http/httpx"
 	"github.com/patrick/yibiao-web/internal/service"
 	"github.com/patrick/yibiao-web/internal/service/agent"
@@ -21,6 +22,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Task 实现前端 `tasks.*` 命名空间的接口。
@@ -42,6 +44,7 @@ type Task struct {
 	tpSvc     *service.TechnicalPlanService
 	settings  *settings.Service
 	artifacts *artifact.Service
+	bus       *events.Bus
 	logger    *slog.Logger
 	toolDecls []any
 
@@ -70,6 +73,7 @@ func NewTask(
 	contentRunner *content.Runner,
 	settingsSvc *settings.Service,
 	artifactSvc *artifact.Service,
+	bus *events.Bus,
 ) *Task {
 	return &Task{
 		planSvc:   planSvc,
@@ -79,6 +83,7 @@ func NewTask(
 		tpSvc:     planSvc,
 		settings:  settingsSvc,
 		artifacts: artifactSvc,
+		bus:       bus,
 		logger:    slog.Default(),
 		tasks:     make(map[string]*taskRecord),
 	}
@@ -383,6 +388,21 @@ func (t *Task) scopeOf(c echo.Context) (string, string, error) {
 	return tenantID, projectID, err
 }
 
+// startBidAnalysisRequest 对齐桌面版 tasks.startBidAnalysis 载荷。
+type startBidAnalysisRequest struct {
+	Mode               string   `json:"mode"`
+	SelectedTaskIDs    []string `json:"selected_task_ids"`
+	TaskIDs            []string `json:"task_ids"`
+	ForceRerun         bool     `json:"force_rerun"`
+	TenderMarkdownPath string   `json:"tenderMarkdownPath"`
+	Items              []bidanalysis.Item `json:"items"`
+	Provider           *struct {
+		BaseURL string `json:"baseUrl"`
+		APIKey  string `json:"apiKey"`
+		Model   string `json:"model"`
+	} `json:"provider"`
+}
+
 // StartBidAnalysis 启动招标文件分析任务。
 //
 // 对应前端 `tasks.startBidAnalysis()`。
@@ -394,18 +414,27 @@ func (t *Task) StartBidAnalysis(c echo.Context) error {
 		return err
 	}
 
-	var req struct {
-		TenderMarkdownPath string             `json:"tenderMarkdownPath"`
-		Items              []bidanalysis.Item `json:"items"`
-	}
+	var req startBidAnalysisRequest
 	if err := c.Bind(&req); err != nil {
 		return httpx.BadRequest("请求体格式错误")
 	}
 
-	// 模型配置
-	provider, modelCfg, err := t.resolveProvider(c, tenantID)
-	if err != nil {
-		return err
+	// 模型配置：同 StartOutlineGeneration，一次 Bind，避免 Echo 二次读 body。
+	var provider agent.Provider
+	var modelCfg agent.ModelConfig
+	if req.Provider != nil && req.Provider.BaseURL != "" && req.Provider.APIKey != "" {
+		provider = agent.Provider{
+			BaseURL: req.Provider.BaseURL,
+			APIKey:  req.Provider.APIKey,
+			Model:   req.Provider.Model,
+		}
+		modelCfg = agent.ModelConfig{ContextLengthLimit: 128000}
+	} else {
+		p, mc, pErr := t.settings.Provider(c.Request().Context(), tenantID)
+		if pErr != nil {
+			return httpx.Fail(c, "MISSING_PROVIDER", pErr.Error())
+		}
+		provider, modelCfg = p, mc
 	}
 
 	// 招标文件：物化到临时文件（agent 需要真实路径）
@@ -420,17 +449,49 @@ func (t *Task) StartBidAnalysis(c echo.Context) error {
 		return httpx.Conflict("TASK_RUNNING", "已有招标分析任务在运行")
 	}
 
+	items := req.Items
+	if len(items) == 0 {
+		items = selectBidAnalysisItems(req.SelectedTaskIDs, req.TaskIDs)
+	}
+
+	uiItems := make([]map[string]any, 0, len(req.SelectedTaskIDs)+len(items))
+	seenUI := map[string]bool{}
+	for _, id := range append(append([]string{}, req.SelectedTaskIDs...), req.TaskIDs...) {
+		if id == "" || seenUI[id] {
+			continue
+		}
+		seenUI[id] = true
+		uiItems = append(uiItems, map[string]any{
+			"id":    id,
+			"label": bidAnalysisUILabel(id),
+		})
+	}
+	if len(uiItems) == 0 {
+		for _, it := range items {
+			uiItems = append(uiItems, map[string]any{"id": it.ID, "label": it.Label})
+		}
+	}
+
 	var (
-		mu     sync.Mutex
-		events []json.RawMessage
+		mu       sync.Mutex
+		evBuffer []json.RawMessage
 	)
 	onEvent := func(ev agent.TaskEvent) {
 		mu.Lock()
 		defer mu.Unlock()
-		events = append(events, ev.Data)
-		if len(events) > 1500 {
-			events = events[len(events)-1000:]
+		evBuffer = append(evBuffer, ev.Data)
+		if len(evBuffer) > 1500 {
+			evBuffer = evBuffer[len(evBuffer)-1000:]
 		}
+		// 原始 sidecar 事件也转发给订阅了 task 的客户端（诊断用）；
+		// 业务进度主要靠 technicalPlanPatch。
+		t.publishTask(tenantID, userID, projectID, map[string]any{
+			"task": map[string]any{
+				"type":   "bid-analysis",
+				"status": "running",
+			},
+			"agentEvent": json.RawMessage(ev.Data),
+		})
 	}
 
 	result, err := t.bidRunner.Start(c.Request().Context(), bidanalysis.StartOptions{
@@ -441,32 +502,146 @@ func (t *Task) StartBidAnalysis(c echo.Context) error {
 		Provider:           provider,
 		Model:              modelCfg,
 		ToolDecls:          t.toolDecls,
-		Items:              req.Items,
+		Items:              items,
 		OnEvent:            onEvent,
 	})
-	// 任务跑完（无论成败）立刻把产物回写进 meta，
-	// 否则前端调 loadState 拿不到任何分析结果。
-	if result != nil && result.TaskID != "" {
-		if _, syncErr := t.tpSvc.SyncBidAnalysisFromArtifacts(
-			c.Request().Context(), tenantID, projectID, result.TaskID, t.artifacts, t.logger,
-		); syncErr != nil {
-			// 回写失败不影响任务本身的结果返回，但要记日志
-			if t.logger != nil {
-				t.logger.Warn("分析结果回写失败: " + syncErr.Error())
-			}
-		}
-	}
-
 	if err != nil {
 		return httpx.Fail(c, "TASK_FAILED", err.Error())
 	}
 
-	return httpx.OK(c, map[string]any{
-		"success": result.Success,
-		"taskId":  result.TaskID,
-		"items":   result.Items,
-		"issues":  result.Issues,
+	mu.Lock()
+	buffered := append([]json.RawMessage(nil), evBuffer...)
+	mu.Unlock()
+	t.mu.Lock()
+	t.tasks[result.TaskID] = &taskRecord{
+		TaskID:    result.TaskID,
+		Type:      "bid-analysis",
+		Status:    "running",
+		Events:    buffered,
+		StartedAt: time.Now(),
+	}
+	t.mu.Unlock()
+
+	selectedIDs := req.SelectedTaskIDs
+	if len(selectedIDs) == 0 {
+		for _, it := range uiItems {
+			if id, _ := it["id"].(string); id != "" {
+				selectedIDs = append(selectedIDs, id)
+			}
+		}
+	}
+	if persistErr := t.tpSvc.PersistBidAnalysisStart(
+		c.Request().Context(), tenantID, projectID, result.TaskID, req.Mode, selectedIDs, uiItems,
+	); persistErr != nil && t.logger != nil {
+		t.logger.Warn("写入招标分析启动状态失败: " + persistErr.Error())
+	}
+
+	pendingTasks := map[string]any{}
+	for _, it := range uiItems {
+		id, _ := it["id"].(string)
+		pendingTasks[id] = map[string]any{
+			"id": id, "label": it["label"], "status": "pending", "content": "",
+		}
+	}
+	t.publishTask(tenantID, userID, projectID, map[string]any{
+		"task": map[string]any{
+			"task_id": result.TaskID,
+			"type":    "bid-analysis",
+			"status":  "running",
+			"progress": 0,
+		},
+		"technicalPlanPatch": map[string]any{
+			"bidAnalysisTask": map[string]any{
+				"task_id": result.TaskID,
+				"type":    "bid-analysis",
+				"status":  "running",
+				"progress": 0,
+			},
+			"bidAnalysisTasks":    pendingTasks,
+			"bidAnalysisProgress": 0,
+			"bidAnalysisMode":     req.Mode,
+			"bidAnalysisSelectedTaskIds": selectedIDs,
+		},
 	})
+
+	return httpx.OK(c, map[string]any{
+		"success": true,
+		"taskId":  result.TaskID,
+		"type":    "bid-analysis",
+		"status":  "running",
+	})
+}
+
+// publishTask 推送桌面形状的 tasks.onTaskEvent 载荷。
+func (t *Task) publishTask(tenantID, userID, projectID string, payload map[string]any) {
+	if t.bus == nil {
+		return
+	}
+	t.bus.Publish("task", events.Scope{
+		TenantID:  tenantID,
+		UserID:    userID,
+		ProjectID: projectID,
+	}, payload)
+}
+
+// selectBidAnalysisItems 把前端 selected_task_ids 映射成 Agent 解析项。
+func selectBidAnalysisItems(selected, taskIDs []string) []bidanalysis.Item {
+	ids := append([]string{}, selected...)
+	ids = append(ids, taskIDs...)
+	if len(ids) == 0 {
+		return bidanalysis.DefaultItems
+	}
+
+	// 前端别名 → Agent 文件名
+	alias := map[string]string{
+		"projectOverview":  "projectBackground",
+		"techRequirements": "technicalRequirements",
+		"businessScoring":  "scoringCriteria",
+		"discardedBids":    "invalidBidAndRejectionItems",
+	}
+	want := map[string]bool{}
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		want[id] = true
+		if mapped, ok := alias[id]; ok {
+			want[mapped] = true
+		}
+	}
+
+	out := make([]bidanalysis.Item, 0, len(want))
+	for _, item := range bidanalysis.DefaultItems {
+		if want[item.ID] {
+			out = append(out, item)
+		}
+	}
+	if len(out) == 0 {
+		return bidanalysis.DefaultItems
+	}
+	return out
+}
+
+func bidAnalysisUILabel(id string) string {
+	labels := map[string]string{
+		"projectOverview":                "项目概述",
+		"techRequirements":               "技术评分要求",
+		"projectInfo":                    "项目信息",
+		"partAInfo":                      "甲方信息",
+		"deliveryAndServiceRequirements": "交货和服务要求",
+		"responseFileRequirements":       "响应文件要求",
+		"scoringCriteria":                "评分标准",
+		"technicalRequirements":          "技术需求",
+		"invalidBidAndRejectionItems":    "无效投标与废标项",
+		"qualificationRequirements":      "资质要求",
+		"businessScoring":                "商务评分要求",
+		"discardedBids":                  "废标项",
+	}
+	if v := labels[id]; v != "" {
+		return v
+	}
+	return id
 }
 
 // StartContentGeneration 启动正文生成任务。

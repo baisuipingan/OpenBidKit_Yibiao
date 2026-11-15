@@ -37,6 +37,7 @@ func (h *TechnicalPlan) registerExtraRoutes(g *echo.Group) {
 	g.POST("/technical-plan/read-tender-source-markdown", h.ReadTenderSourceMarkdown)
 	g.POST("/technical-plan/remove-original-plan-document", h.RemoveOriginalPlanDocument)
 	g.POST("/technical-plan/load-generation-config", h.LoadGenerationConfig)
+	g.POST("/technical-plan/save-generation-config", h.SaveGenerationConfig)
 	g.POST("/technical-plan/preview-content-word", h.PreviewContentWord)
 	g.POST("/technical-plan/preview-business-chapter-word", h.PreviewBusinessChapterWord)
 	g.POST("/technical-plan/available", h.Available)
@@ -296,8 +297,13 @@ func (h *TechnicalPlan) SaveBidAnalysisConfig(c echo.Context) error {
 		return httpx.Internal(ensureErr)
 	}
 
-	// 模式落到 generation_config 表（有独立列）
-	if mode, ok := payload["bidAnalysisMode"].(string); ok && mode != "" {
+	// 模式落到 generation_config 表（有独立列）。
+	// 桌面/前端常传 mode；旧 Web 传 bidAnalysisMode。
+	mode, _ := payload["bidAnalysisMode"].(string)
+	if mode == "" {
+		mode, _ = payload["mode"].(string)
+	}
+	if mode != "" {
 		if err := h.q.UpdateGenerationConfigBidAnalysisMode(ctx, store.UpdateGenerationConfigBidAnalysisModeParams{
 			ProjectID: projectID, TenantID: tenantID, BidAnalysisMode: mode,
 		}); err != nil {
@@ -305,22 +311,57 @@ func (h *TechnicalPlan) SaveBidAnalysisConfig(c echo.Context) error {
 		}
 	}
 
-	// 选中的分析任务放 extra
+	// 选中的分析任务放 extra（兼容 selectedTaskIds / bidAnalysisSelectedTaskIds）
 	extra, loadErr := h.loadExtra(c)
 	if loadErr != nil {
 		return loadErr
 	}
 	if ids, ok := payload["bidAnalysisSelectedTaskIds"]; ok {
 		extra["bidAnalysisSelectedTaskIds"] = ids
+	} else if ids, ok := payload["selectedTaskIds"]; ok {
+		extra["bidAnalysisSelectedTaskIds"] = ids
 	}
 	if tasks, ok := payload["bidAnalysisTasks"]; ok {
 		extra["bidAnalysisTasks"] = tasks
+	}
+	if sectionMode, ok := payload["bidSectionMode"].(string); ok && sectionMode != "" {
+		extra["bidSectionMode"] = sectionMode
 	}
 	if err := h.saveExtra(c, extra); err != nil {
 		return err
 	}
 
 	return h.LoadState(c)
+}
+
+// SaveGenerationConfig 对应桌面版 technicalPlan.saveGenerationConfig。
+// 前端每次只传局部字段，必须回传完整配置对象，避免 state 被写成 undefined 白屏。
+func (h *TechnicalPlan) SaveGenerationConfig(c echo.Context) error {
+	var payload map[string]any
+	if err := c.Bind(&payload); err != nil {
+		return httpx.BadRequest("请求体格式错误")
+	}
+	tenantID, _ := identity(c)
+	projectID, err := projectID(c)
+	if err != nil {
+		return err
+	}
+
+	view, err := h.svc.SaveGenerationConfigPatch(c.Request().Context(), tenantID, projectID, payload)
+	if err != nil {
+		return httpx.Internal(err)
+	}
+
+	// 若本次带了 referenceKnowledgeDocumentIds，一并回传
+	if ids, ok := payload["referenceKnowledgeDocumentIds"]; ok {
+		view["referenceKnowledgeDocumentIds"] = ids
+	} else {
+		state, loadErr := h.svc.LoadState(c.Request().Context(), tenantID, projectID)
+		if loadErr == nil {
+			view["referenceKnowledgeDocumentIds"] = state.ReferenceKnowledgeIDs
+		}
+	}
+	return httpx.OK(c, view)
 }
 
 // SelectBidSection 选择标段。
@@ -463,16 +504,36 @@ func (h *TechnicalPlan) SaveContentGenerationOptions(c echo.Context) error {
 		return httpx.BadRequest("请求体格式错误")
 	}
 
-	extra, err := h.loadExtra(c)
+	tenantID, _ := identity(c)
+	projectID, err := projectID(c)
 	if err != nil {
 		return err
 	}
-	extra["contentGenerationOptions"] = payload
 
+	// 同步写入 generation_config 列，保证 load-state 能还原配图比例等字段
+	view, saveErr := h.svc.SaveGenerationConfigPatch(c.Request().Context(), tenantID, projectID, map[string]any{
+		"contentGenerationOptions": payload,
+	})
+	if saveErr != nil {
+		return httpx.Internal(saveErr)
+	}
+
+	extra, loadErr := h.loadExtra(c)
+	if loadErr != nil {
+		return loadErr
+	}
+	opts := payload
+	if v, ok := view["contentGenerationOptions"].(map[string]any); ok {
+		opts = v
+	}
+	extra["contentGenerationOptions"] = opts
 	if err := h.saveExtra(c, extra); err != nil {
 		return err
 	}
-	return httpx.OK(c, map[string]any{"success": true})
+	return httpx.OK(c, map[string]any{
+		"success":                  true,
+		"contentGenerationOptions": opts,
+	})
 }
 
 // SaveBusinessFillReview 保存商务标补全复核结果。

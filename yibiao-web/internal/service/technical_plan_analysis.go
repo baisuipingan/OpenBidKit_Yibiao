@@ -190,6 +190,13 @@ func (s *TechnicalPlanService) SyncBidAnalysisFromArtifacts(
 	}
 	extra["bidAnalysisTasks"] = existing
 	extra["bidAnalysisProgress"] = 100
+	extra["bidAnalysisTask"] = map[string]any{
+		"task_id": taskID,
+		"type":    "bid-analysis",
+		"status":  "success",
+		"progress": 100,
+		"message": "招标文件解析完成",
+	}
 
 	// 顶层冗余字段：value 是 agent 产出的文件名，直接在 items 里找
 	for dst, src := range topLevelFieldSource {

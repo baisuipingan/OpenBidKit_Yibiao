@@ -132,6 +132,7 @@ type PlanState struct {
 	BidAnalysisSelectedIDs     []string       `json:"bidAnalysisSelectedTaskIds"`
 	BidAnalysisTasks           map[string]any `json:"bidAnalysisTasks"`
 	BidAnalysisProgress        int            `json:"bidAnalysisProgress"`
+	BidAnalysisTask            map[string]any `json:"bidAnalysisTask"`
 	BidSectionMode             string         `json:"bidSectionMode"`
 	BidSectionExtractionStatus string         `json:"bidSectionExtractionStatus"`
 	OutlineMode                string         `json:"outlineMode"`
@@ -142,6 +143,7 @@ type PlanState struct {
 	GlobalFacts                []any          `json:"globalFacts"`
 	ExportTemplateID           string         `json:"exportTemplateId"`
 	ExportTemplateScope        string         `json:"exportTemplateScope"`
+	ContentGenerationOptions   map[string]any `json:"contentGenerationOptions"`
 	ContentGenerationSections  map[string]any `json:"contentGenerationSections"`
 	// ContentGenerationRuntime 是正文生成运行时状态。
 	// 前端从这里读 section_words 显示每节字数。
@@ -349,7 +351,8 @@ func toPlanState(
 		// 以下字段给默认值，避免前端读 undefined
 		BidAnalysisTasks:          map[string]any{},
 		BidAnalysisSelectedIDs:    []string{},
-		ReferenceKnowledgeIDs:     []string{},
+		BidAnalysisTask:           nil,
+		ReferenceKnowledgeIDs:     append([]string{}, meta.ReferenceKnowledgeDocumentIds...),
 		GlobalFacts:               []any{},
 		ContentGenerationSections: map[string]any{},
 		ContentGenerationRuntime:  buildContentRuntime(nodes),
@@ -383,6 +386,20 @@ func toPlanState(
 			"maximumWords": cfg.MaximumWords,
 			"sectionWords": cfg.SectionWords,
 		},
+		ContentGenerationOptions: map[string]any{
+			"useAiImages":           cfg.UseAiImages,
+			"useMermaidImages":      cfg.UseMermaidImages,
+			"useHtmlImages":         cfg.UseHtmlImages,
+			"tableRequirement":      cfg.TableRequirement,
+			"imageQuantity":         cfg.ImageQuantity,
+			"layoutCheck":           cfg.LayoutCheck,
+			"useSingleImageLayout":  cfg.UseSingleImageLayout,
+			"useImageTextLayout":    cfg.UseImageTextLayout,
+			"useThreeImagesLayout":  cfg.UseThreeImagesLayout,
+			"useFourImagesLayout":   cfg.UseFourImagesLayout,
+			"htmlImageOptimization": cfg.HtmlImageOptimization,
+			"wordCountRepair":       cfg.WordCountRepair,
+		},
 	}
 
 	if meta.TenderImportedAt.Valid {
@@ -407,6 +424,12 @@ func toPlanState(
 			if v, ok := extra["bidAnalysisTasks"].(map[string]any); ok {
 				st.BidAnalysisTasks = v
 			}
+			if v, ok := extra["bidAnalysisTask"].(map[string]any); ok {
+				st.BidAnalysisTask = v
+			}
+			if v, ok := extra["bidAnalysisProgress"].(float64); ok {
+				st.BidAnalysisProgress = int(v)
+			}
 			if v, ok := extra["bidAnalysisSelectedTaskIds"].([]any); ok {
 				ids := make([]string, 0, len(v))
 				for _, item := range v {
@@ -421,6 +444,17 @@ func toPlanState(
 			}
 			if v, ok := extra["contentGenerationPlans"].(map[string]any); ok {
 				st.ContentGenerationPlans = v
+			}
+			if v, ok := extra["contentGenerationOptions"].(map[string]any); ok {
+				// extra 覆盖列默认值（兼容旧只写 extra 的路径）
+				merged := st.ContentGenerationOptions
+				if merged == nil {
+					merged = map[string]any{}
+				}
+				for k, val := range v {
+					merged[k] = val
+				}
+				st.ContentGenerationOptions = merged
 			}
 			// 分析结果提到顶层，前端 BidAnalysisPage 直接读这两个字段
 			if v, ok := extra["projectOverview"].(string); ok && v != "" {
