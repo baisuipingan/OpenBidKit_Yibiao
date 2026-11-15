@@ -33,6 +33,8 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 5173,
     strictPort: true,
+    // Cloudflare quick tunnel Host 每次变化；允许 *.trycloudflare.com 以便公网演示
+    allowedHosts: ['.trycloudflare.com', 'localhost', '127.0.0.1'],
     // 公网访问时 HMR 的 websocket 必须指回外部地址，否则热更新失效。
     // 关键：容器内没有公网 IP，不能让 vite 自己去 bind 那个地址，
     // 所以要同时指定 clientPort（浏览器连的端口）和 path，
