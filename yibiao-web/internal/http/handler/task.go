@@ -2,25 +2,25 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/labstack/echo/v4"
 
+	"github.com/patrick/yibiao-web/internal/events"
 	"github.com/patrick/yibiao-web/internal/http/httpx"
 	"github.com/patrick/yibiao-web/internal/service"
 	"github.com/patrick/yibiao-web/internal/service/agent"
 	"github.com/patrick/yibiao-web/internal/service/agent/bidanalysis"
 	"github.com/patrick/yibiao-web/internal/service/agent/content"
+	"github.com/patrick/yibiao-web/internal/service/agent/globalfacts"
 	"github.com/patrick/yibiao-web/internal/service/agent/outline"
 	"github.com/patrick/yibiao-web/internal/service/artifact"
 	"github.com/patrick/yibiao-web/internal/service/settings"
-	"github.com/patrick/yibiao-web/internal/service/storage"
-	"io"
-	"log/slog"
-	"os"
-	"path/filepath"
 )
 
 // Task 实现前端 `tasks.*` 命名空间的接口。
@@ -35,15 +35,17 @@ import (
 //
 //	把桥接层（前端熟悉的 tasks.* 语义）翻译成具体的 Agent 任务。
 type Task struct {
-	planSvc   *service.TechnicalPlanService
-	outline   *outline.Runner
-	bidRunner *bidanalysis.Runner
-	content   *content.Runner
-	tpSvc     *service.TechnicalPlanService
-	settings  *settings.Service
-	artifacts *artifact.Service
-	logger    *slog.Logger
-	toolDecls []any
+	planSvc     *service.TechnicalPlanService
+	outline     *outline.Runner
+	bidRunner   *bidanalysis.Runner
+	content     *content.Runner
+	globalFacts *globalfacts.Runner
+	tpSvc       *service.TechnicalPlanService
+	settings    *settings.Service
+	artifacts   *artifact.Service
+	bus         *events.Bus
+	logger      *slog.Logger
+	toolDecls   []any
 
 	mu    sync.RWMutex
 	tasks map[string]*taskRecord
@@ -68,19 +70,23 @@ func NewTask(
 	outlineRunner *outline.Runner,
 	bidRunner *bidanalysis.Runner,
 	contentRunner *content.Runner,
+	globalFactsRunner *globalfacts.Runner,
 	settingsSvc *settings.Service,
 	artifactSvc *artifact.Service,
+	bus *events.Bus,
 ) *Task {
 	return &Task{
-		planSvc:   planSvc,
-		outline:   outlineRunner,
-		bidRunner: bidRunner,
-		content:   contentRunner,
-		tpSvc:     planSvc,
-		settings:  settingsSvc,
-		artifacts: artifactSvc,
-		logger:    slog.Default(),
-		tasks:     make(map[string]*taskRecord),
+		planSvc:     planSvc,
+		outline:     outlineRunner,
+		bidRunner:   bidRunner,
+		content:     contentRunner,
+		globalFacts: globalFactsRunner,
+		tpSvc:       planSvc,
+		settings:    settingsSvc,
+		artifacts:   artifactSvc,
+		bus:         bus,
+		logger:      slog.Default(),
+		tasks:       make(map[string]*taskRecord),
 	}
 }
 
@@ -93,6 +99,7 @@ func (t *Task) SetTools(decls []any) {
 func (t *Task) Register(g *echo.Group) {
 	g.POST("/tasks/start-outline-generation", t.StartOutlineGeneration)
 	g.POST("/tasks/start-bid-analysis", t.StartBidAnalysis)
+	g.POST("/tasks/start-global-facts-generation", t.StartGlobalFactsGeneration)
 	g.POST("/tasks/start-content-generation", t.StartContentGeneration)
 	// 手动重同步：把某次任务的产物重新回写进 meta。
 	// 用途：产物已入库但 meta 没同步（或改了映射规则要重跑）时，
@@ -187,11 +194,34 @@ func (t *Task) StartOutlineGeneration(c echo.Context) error {
 
 	onEvent := func(ev agent.TaskEvent) {
 		mu.Lock()
-		defer mu.Unlock()
 		events = append(events, ev.Data)
 		if len(events) > 1500 {
 			events = events[len(events)-1000:]
 		}
+		tid := owner
+		mu.Unlock()
+		if tid == "" {
+			return
+		}
+		// 原始事件附带 technicalPlanPatch，否则 TechnicalPlanHome 会直接忽略
+		t.publishTask(tenantID, userID, projectID, map[string]any{
+			"task": map[string]any{
+				"task_id":  tid,
+				"type":     "outline-generation",
+				"status":   "running",
+				"progress": 15,
+			},
+			"technicalPlanPatch": map[string]any{
+				"outlineGenerationTask": map[string]any{
+					"task_id":  tid,
+					"type":     "outline-generation",
+					"status":   "running",
+					"progress": 15,
+					"logs":     []string{"目录生成进行中"},
+				},
+			},
+			"agentEvent": json.RawMessage(ev.Data),
+		})
 	}
 
 	result, err := t.outline.Start(c.Request().Context(), outline.StartOptions{
@@ -209,9 +239,9 @@ func (t *Task) StartOutlineGeneration(c echo.Context) error {
 		return httpx.Internal(err)
 	}
 
-	owner = result.TaskID
 	mu.Lock()
-	buffered := events
+	owner = result.TaskID
+	buffered := append([]json.RawMessage(nil), events...)
 	mu.Unlock()
 
 	t.mu.Lock()
@@ -224,11 +254,31 @@ func (t *Task) StartOutlineGeneration(c echo.Context) error {
 	}
 	t.mu.Unlock()
 
+	if persistErr := t.tpSvc.PersistOutlineGenerationStart(
+		c.Request().Context(), tenantID, projectID, result.TaskID,
+	); persistErr != nil && t.logger != nil {
+		t.logger.Warn("写入目录启动状态失败: " + persistErr.Error())
+	}
+
 	// 同步更新技术方案步骤，让前端知道进入了目录阶段
 	if err := t.planSvc.UpdateStep(c.Request().Context(), tenantID, projectID, "outline-generation"); err != nil {
 		// 步骤更新失败不影响任务本身
 		c.Logger().Warnf("更新步骤失败: %v", err)
 	}
+
+	runningTask := map[string]any{
+		"task_id":  result.TaskID,
+		"type":     "outline-generation",
+		"status":   "running",
+		"progress": 5,
+		"logs":     []string{"目录生成任务已启动"},
+	}
+	t.publishTask(tenantID, userID, projectID, map[string]any{
+		"task": runningTask,
+		"technicalPlanPatch": map[string]any{
+			"outlineGenerationTask": runningTask,
+		},
+	})
 
 	return httpx.OK(c, map[string]any{
 		"taskId": result.TaskID,
@@ -344,7 +394,7 @@ func (t *Task) Events(c echo.Context) error {
 					Status string `json:"status"`
 				}
 				if json.Unmarshal(ev, &head) == nil && head.Type == "task_end" {
-					t.markDone(req.TaskID, head.Status)
+					t.MarkDone(req.TaskID, head.Status)
 				}
 			}
 
@@ -360,8 +410,12 @@ func (t *Task) Events(c echo.Context) error {
 	}
 }
 
-// markDone 标记任务完成。
-func (t *Task) markDone(taskID, status string) {
+// MarkDone 标记内存任务完成。
+//
+// 必须在 runner 完成回调里调用，不能只依赖 /tasks/events SSE：
+// 没有订阅者或未收到 task_end 时，findRunning 会一直把已结束任务当成 running，
+// 导致下一次 start-* 误报 TASK_RUNNING。
+func (t *Task) MarkDone(taskID, status string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	rec := t.tasks[taskID]
@@ -376,11 +430,55 @@ func (t *Task) markDone(taskID, status string) {
 	}
 }
 
+// Track 把外部启动的任务（如 Content.Generate）登记进 get-active 同一份 map。
+func (t *Task) Track(taskID, typ string) {
+	if taskID == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if existing, ok := t.tasks[taskID]; ok && existing != nil && !existing.Done {
+		return
+	}
+	t.tasks[taskID] = &taskRecord{
+		TaskID:    taskID,
+		Type:      typ,
+		Status:    "running",
+		StartedAt: time.Now(),
+	}
+}
+
+// HasRunning 判断内存中是否仍有未完成任务。
+func (t *Task) HasRunning(taskID string) bool {
+	if taskID == "" {
+		return false
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	rec := t.tasks[taskID]
+	return rec != nil && !rec.Done
+}
+
 // scopeOf 取当前租户与项目。
 func (t *Task) scopeOf(c echo.Context) (string, string, error) {
 	tenantID, _ := identity(c)
 	projectID, err := projectID(c)
 	return tenantID, projectID, err
+}
+
+// startBidAnalysisRequest 对齐桌面版 tasks.startBidAnalysis 载荷。
+type startBidAnalysisRequest struct {
+	Mode               string   `json:"mode"`
+	SelectedTaskIDs    []string `json:"selected_task_ids"`
+	TaskIDs            []string `json:"task_ids"`
+	ForceRerun         bool     `json:"force_rerun"`
+	TenderMarkdownPath string   `json:"tenderMarkdownPath"`
+	Items              []bidanalysis.Item `json:"items"`
+	Provider           *struct {
+		BaseURL string `json:"baseUrl"`
+		APIKey  string `json:"apiKey"`
+		Model   string `json:"model"`
+	} `json:"provider"`
 }
 
 // StartBidAnalysis 启动招标文件分析任务。
@@ -394,18 +492,27 @@ func (t *Task) StartBidAnalysis(c echo.Context) error {
 		return err
 	}
 
-	var req struct {
-		TenderMarkdownPath string             `json:"tenderMarkdownPath"`
-		Items              []bidanalysis.Item `json:"items"`
-	}
+	var req startBidAnalysisRequest
 	if err := c.Bind(&req); err != nil {
 		return httpx.BadRequest("请求体格式错误")
 	}
 
-	// 模型配置
-	provider, modelCfg, err := t.resolveProvider(c, tenantID)
-	if err != nil {
-		return err
+	// 模型配置：同 StartOutlineGeneration，一次 Bind，避免 Echo 二次读 body。
+	var provider agent.Provider
+	var modelCfg agent.ModelConfig
+	if req.Provider != nil && req.Provider.BaseURL != "" && req.Provider.APIKey != "" {
+		provider = agent.Provider{
+			BaseURL: req.Provider.BaseURL,
+			APIKey:  req.Provider.APIKey,
+			Model:   req.Provider.Model,
+		}
+		modelCfg = agent.ModelConfig{ContextLengthLimit: 128000}
+	} else {
+		p, mc, pErr := t.settings.Provider(c.Request().Context(), tenantID)
+		if pErr != nil {
+			return httpx.Fail(c, "MISSING_PROVIDER", pErr.Error())
+		}
+		provider, modelCfg = p, mc
 	}
 
 	// 招标文件：物化到临时文件（agent 需要真实路径）
@@ -420,17 +527,49 @@ func (t *Task) StartBidAnalysis(c echo.Context) error {
 		return httpx.Conflict("TASK_RUNNING", "已有招标分析任务在运行")
 	}
 
+	items := req.Items
+	if len(items) == 0 {
+		items = selectBidAnalysisItems(req.SelectedTaskIDs, req.TaskIDs)
+	}
+
+	uiItems := make([]map[string]any, 0, len(req.SelectedTaskIDs)+len(items))
+	seenUI := map[string]bool{}
+	for _, id := range append(append([]string{}, req.SelectedTaskIDs...), req.TaskIDs...) {
+		if id == "" || seenUI[id] {
+			continue
+		}
+		seenUI[id] = true
+		uiItems = append(uiItems, map[string]any{
+			"id":    id,
+			"label": bidAnalysisUILabel(id),
+		})
+	}
+	if len(uiItems) == 0 {
+		for _, it := range items {
+			uiItems = append(uiItems, map[string]any{"id": it.ID, "label": it.Label})
+		}
+	}
+
 	var (
-		mu     sync.Mutex
-		events []json.RawMessage
+		mu       sync.Mutex
+		evBuffer []json.RawMessage
 	)
 	onEvent := func(ev agent.TaskEvent) {
 		mu.Lock()
 		defer mu.Unlock()
-		events = append(events, ev.Data)
-		if len(events) > 1500 {
-			events = events[len(events)-1000:]
+		evBuffer = append(evBuffer, ev.Data)
+		if len(evBuffer) > 1500 {
+			evBuffer = evBuffer[len(evBuffer)-1000:]
 		}
+		// 原始 sidecar 事件也转发给订阅了 task 的客户端（诊断用）；
+		// 业务进度主要靠 technicalPlanPatch。
+		t.publishTask(tenantID, userID, projectID, map[string]any{
+			"task": map[string]any{
+				"type":   "bid-analysis",
+				"status": "running",
+			},
+			"agentEvent": json.RawMessage(ev.Data),
+		})
 	}
 
 	result, err := t.bidRunner.Start(c.Request().Context(), bidanalysis.StartOptions{
@@ -441,32 +580,146 @@ func (t *Task) StartBidAnalysis(c echo.Context) error {
 		Provider:           provider,
 		Model:              modelCfg,
 		ToolDecls:          t.toolDecls,
-		Items:              req.Items,
+		Items:              items,
 		OnEvent:            onEvent,
 	})
-	// 任务跑完（无论成败）立刻把产物回写进 meta，
-	// 否则前端调 loadState 拿不到任何分析结果。
-	if result != nil && result.TaskID != "" {
-		if _, syncErr := t.tpSvc.SyncBidAnalysisFromArtifacts(
-			c.Request().Context(), tenantID, projectID, result.TaskID, t.artifacts, t.logger,
-		); syncErr != nil {
-			// 回写失败不影响任务本身的结果返回，但要记日志
-			if t.logger != nil {
-				t.logger.Warn("分析结果回写失败: " + syncErr.Error())
-			}
-		}
-	}
-
 	if err != nil {
 		return httpx.Fail(c, "TASK_FAILED", err.Error())
 	}
 
-	return httpx.OK(c, map[string]any{
-		"success": result.Success,
-		"taskId":  result.TaskID,
-		"items":   result.Items,
-		"issues":  result.Issues,
+	mu.Lock()
+	buffered := append([]json.RawMessage(nil), evBuffer...)
+	mu.Unlock()
+	t.mu.Lock()
+	t.tasks[result.TaskID] = &taskRecord{
+		TaskID:    result.TaskID,
+		Type:      "bid-analysis",
+		Status:    "running",
+		Events:    buffered,
+		StartedAt: time.Now(),
+	}
+	t.mu.Unlock()
+
+	selectedIDs := req.SelectedTaskIDs
+	if len(selectedIDs) == 0 {
+		for _, it := range uiItems {
+			if id, _ := it["id"].(string); id != "" {
+				selectedIDs = append(selectedIDs, id)
+			}
+		}
+	}
+	if persistErr := t.tpSvc.PersistBidAnalysisStart(
+		c.Request().Context(), tenantID, projectID, result.TaskID, req.Mode, selectedIDs, uiItems,
+	); persistErr != nil && t.logger != nil {
+		t.logger.Warn("写入招标分析启动状态失败: " + persistErr.Error())
+	}
+
+	pendingTasks := map[string]any{}
+	for _, it := range uiItems {
+		id, _ := it["id"].(string)
+		pendingTasks[id] = map[string]any{
+			"id": id, "label": it["label"], "status": "pending", "content": "",
+		}
+	}
+	t.publishTask(tenantID, userID, projectID, map[string]any{
+		"task": map[string]any{
+			"task_id": result.TaskID,
+			"type":    "bid-analysis",
+			"status":  "running",
+			"progress": 0,
+		},
+		"technicalPlanPatch": map[string]any{
+			"bidAnalysisTask": map[string]any{
+				"task_id": result.TaskID,
+				"type":    "bid-analysis",
+				"status":  "running",
+				"progress": 0,
+			},
+			"bidAnalysisTasks":    pendingTasks,
+			"bidAnalysisProgress": 0,
+			"bidAnalysisMode":     req.Mode,
+			"bidAnalysisSelectedTaskIds": selectedIDs,
+		},
 	})
+
+	return httpx.OK(c, map[string]any{
+		"success": true,
+		"taskId":  result.TaskID,
+		"type":    "bid-analysis",
+		"status":  "running",
+	})
+}
+
+// publishTask 推送桌面形状的 tasks.onTaskEvent 载荷。
+func (t *Task) publishTask(tenantID, userID, projectID string, payload map[string]any) {
+	if t.bus == nil {
+		return
+	}
+	t.bus.Publish("task", events.Scope{
+		TenantID:  tenantID,
+		UserID:    userID,
+		ProjectID: projectID,
+	}, payload)
+}
+
+// selectBidAnalysisItems 把前端 selected_task_ids 映射成 Agent 解析项。
+func selectBidAnalysisItems(selected, taskIDs []string) []bidanalysis.Item {
+	ids := append([]string{}, selected...)
+	ids = append(ids, taskIDs...)
+	if len(ids) == 0 {
+		return bidanalysis.DefaultItems
+	}
+
+	// 前端别名 → Agent 文件名
+	alias := map[string]string{
+		"projectOverview":  "projectBackground",
+		"techRequirements": "technicalRequirements",
+		"businessScoring":  "scoringCriteria",
+		"discardedBids":    "invalidBidAndRejectionItems",
+	}
+	want := map[string]bool{}
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		want[id] = true
+		if mapped, ok := alias[id]; ok {
+			want[mapped] = true
+		}
+	}
+
+	out := make([]bidanalysis.Item, 0, len(want))
+	for _, item := range bidanalysis.DefaultItems {
+		if want[item.ID] {
+			out = append(out, item)
+		}
+	}
+	if len(out) == 0 {
+		return bidanalysis.DefaultItems
+	}
+	return out
+}
+
+func bidAnalysisUILabel(id string) string {
+	labels := map[string]string{
+		"projectOverview":                "项目概述",
+		"techRequirements":               "技术评分要求",
+		"projectInfo":                    "项目信息",
+		"partAInfo":                      "甲方信息",
+		"deliveryAndServiceRequirements": "交货和服务要求",
+		"responseFileRequirements":       "响应文件要求",
+		"scoringCriteria":                "评分标准",
+		"technicalRequirements":          "技术需求",
+		"invalidBidAndRejectionItems":    "无效投标与废标项",
+		"qualificationRequirements":      "资质要求",
+		"businessScoring":                "商务评分要求",
+		"discardedBids":                  "废标项",
+	}
+	if v := labels[id]; v != "" {
+		return v
+	}
+	return id
 }
 
 // StartContentGeneration 启动正文生成任务。
@@ -562,10 +815,51 @@ func (t *Task) StartContentGeneration(c echo.Context) error {
 		return httpx.Fail(c, "TASK_FAILED", err.Error())
 	}
 
+	mu.Lock()
+	buffered := append([]json.RawMessage(nil), events...)
+	mu.Unlock()
+	t.mu.Lock()
+	t.tasks[result.TaskID] = &taskRecord{
+		TaskID:    result.TaskID,
+		Type:      "content-generation",
+		Status:    "running",
+		Events:    buffered,
+		StartedAt: time.Now(),
+	}
+	t.mu.Unlock()
+
+	runningTask := map[string]any{
+		"task_id":  result.TaskID,
+		"type":     "content-generation",
+		"status":   "running",
+		"progress": 5,
+		"logs":     []string{"正文生成任务已启动"},
+	}
+	pendingSections := map[string]any{}
+	for _, sec := range sections {
+		pendingSections[sec.NodeID] = map[string]any{
+			"id": sec.NodeID, "title": sec.Title, "status": "pending", "content": "",
+		}
+	}
+	if persistErr := t.tpSvc.PersistContentGenerationStart(
+		c.Request().Context(), tenantID, projectID, result.TaskID, pendingSections,
+	); persistErr != nil && t.logger != nil {
+		t.logger.Warn("写入正文启动状态失败: " + persistErr.Error())
+	}
+	t.publishTask(tenantID, userID, projectID, map[string]any{
+		"task": runningTask,
+		"technicalPlanPatch": map[string]any{
+			"contentGenerationTask":     runningTask,
+			"contentGenerationSections": pendingSections,
+		},
+	})
+
 	return httpx.OK(c, map[string]any{
 		"success":      true,
 		"taskId":       result.TaskID,
 		"sectionCount": result.SectionCount,
+		"type":         "content-generation",
+		"status":       "running",
 	})
 }
 
@@ -577,48 +871,16 @@ func (t *Task) StartContentGeneration(c echo.Context) error {
 //
 // 调用方负责删除临时文件。
 func (t *Task) materializeTenderMarkdown(c echo.Context, tenantID, projectID, explicit string) (string, func(), error) {
-	noop := func() {}
-
-	// 已给路径且文件存在 → 直接用
-	if explicit != "" {
-		if _, err := os.Stat(explicit); err == nil {
-			return explicit, noop, nil
+	path, cleanup, err := MaterializeTenderMarkdown(
+		c.Request().Context(), t.artifacts, tenantID, projectID, explicit,
+	)
+	if err != nil {
+		if errors.Is(err, ErrMissingTender) {
+			return "", cleanup, httpx.Fail(c, "MISSING_TENDER", "未找到招标文件，请先导入")
 		}
+		return "", cleanup, httpx.Internal(err)
 	}
-
-	if t.artifacts == nil {
-		return "", noop, httpx.Fail(c, "MISSING_TENDER", "缺少招标文件路径")
-	}
-
-	// 从 artifact 取最新的 tender.md
-	scope := storage.Scope{TenantID: tenantID, ProjectID: projectID}
-	rc, _, err := t.artifacts.Get(c.Request().Context(), scope, "tender.md", 0)
-	if err != nil {
-		return "", noop, httpx.Fail(c, "MISSING_TENDER", "未找到招标文件，请先导入")
-	}
-	defer func() { _ = rc.Close() }()
-
-	dir, err := os.MkdirTemp("", "yb-tender-*")
-	if err != nil {
-		return "", noop, httpx.Internal(err)
-	}
-
-	dst := filepath.Join(dir, "tender.md")
-	f, err := os.Create(dst)
-	if err != nil {
-		_ = os.RemoveAll(dir)
-		return "", noop, httpx.Internal(err)
-	}
-
-	if _, err := io.Copy(f, rc); err != nil {
-		_ = f.Close()
-		_ = os.RemoveAll(dir)
-		return "", noop, httpx.Internal(err)
-	}
-	_ = f.Close()
-
-	cleanup := func() { _ = os.RemoveAll(dir) }
-	return dst, cleanup, nil
+	return path, cleanup, nil
 }
 
 // resolveProvider 取模型配置：请求里带就用，否则从租户配置读。

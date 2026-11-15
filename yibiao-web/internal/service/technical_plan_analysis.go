@@ -190,6 +190,13 @@ func (s *TechnicalPlanService) SyncBidAnalysisFromArtifacts(
 	}
 	extra["bidAnalysisTasks"] = existing
 	extra["bidAnalysisProgress"] = 100
+	extra["bidAnalysisTask"] = map[string]any{
+		"task_id": taskID,
+		"type":    "bid-analysis",
+		"status":  "success",
+		"progress": 100,
+		"message": "招标文件解析完成",
+	}
 
 	// 顶层冗余字段：value 是 agent 产出的文件名，直接在 items 里找
 	for dst, src := range topLevelFieldSource {
@@ -304,6 +311,12 @@ func (s *TechnicalPlanService) SyncOutlineFromArtifacts(
 	}
 
 	total := countOutlineNodes(nodes)
+	if err := s.PersistOutlineGenerationSuccess(ctx, tenantID, projectID, taskID, total); err != nil {
+		log.Warn("写入目录成功状态失败", slog.String("error", err.Error()))
+	}
+	if _, snapErr := s.PersistOutlineWordControlSnapshot(ctx, tenantID, projectID); snapErr != nil {
+		log.Warn("写入字数控制快照失败", slog.String("error", snapErr.Error()))
+	}
 	log.Info("目录已写进节点表",
 		slog.String("task_id", taskID),
 		slog.Int("nodes", total),
@@ -482,6 +495,21 @@ func (s *TechnicalPlanService) SyncContentFromArtifacts(
 		slog.Int("written", written),
 	)
 
+	// 同步更新 contentGenerationTask / sections，否则 load-state 会一直卡在 running + 空正文。
+	sections, n, buildErr := s.BuildContentSectionsFromNodes(ctx, tenantID, projectID)
+	if buildErr != nil && log != nil {
+		log.Warn("构造正文小节状态失败", slog.String("error", buildErr.Error()))
+	}
+	if written > 0 {
+		if persistErr := s.PersistContentGenerationSuccess(ctx, tenantID, projectID, taskID, sections, written); persistErr != nil && log != nil {
+			log.Warn("写入正文成功状态失败", slog.String("error", persistErr.Error()))
+		}
+	} else if n == 0 {
+		if persistErr := s.PersistContentGenerationFailed(ctx, tenantID, projectID, taskID, "正文生成失败：未得到有效章节"); persistErr != nil && log != nil {
+			log.Warn("写入正文失败状态失败", slog.String("error", persistErr.Error()))
+		}
+	}
+
 	return written, nil
 }
 
@@ -547,6 +575,18 @@ func stripLeadingNumber(s string) string {
 }
 
 // UpdateSectionContent 更新某节点正文（内部用，支持字符串 ID）。
+// UpdateSectionContentByProject 用字符串租户/项目 ID 写入单节正文（增量进度用）。
+func (s *TechnicalPlanService) UpdateSectionContentByProject(
+	ctx context.Context,
+	tenantID, projectID, nodeID, content string,
+) error {
+	tid, pid, err := s.resolve(tenantID, projectID)
+	if err != nil {
+		return err
+	}
+	return s.UpdateSectionContent(ctx, tid, pid, nodeID, content)
+}
+
 func (s *TechnicalPlanService) UpdateSectionContent(ctx context.Context, tid, pid uuid.UUID, nodeID, content string) error {
 	if parsed, err := uuid.Parse(nodeID); err == nil {
 		return s.q.UpdateOutlineNodeContent(ctx, store.UpdateOutlineNodeContentParams{

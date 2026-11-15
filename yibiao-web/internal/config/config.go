@@ -60,6 +60,9 @@ type AuthConfig struct {
 	// DefaultTenantID 单租户阶段的默认租户。
 	// 多租户上线后，租户由登录态决定，此值仅用于初始化和开发。
 	DefaultTenantID string
+	// DemoAuthBypass 打开后，未带令牌的请求会以默认管理员身份继续。
+	// 仅用于演示/本地联调，生产环境禁止开启；登录与租户代码仍保留。
+	DemoAuthBypass bool
 }
 
 type StoreConfig struct {
@@ -157,6 +160,7 @@ func Load() (*Config, error) {
 			AccessTokenTTL:  envDuration("ACCESS_TOKEN_TTL", 15*time.Minute),
 			RefreshTokenTTL: envDuration("REFRESH_TOKEN_TTL", 7*24*time.Hour),
 			DefaultTenantID: env("DEFAULT_TENANT_ID", ""),
+			DemoAuthBypass:  envBool("DEMO_AUTH_BYPASS", false),
 		},
 		Store: StoreConfig{
 			Root:        env("STORAGE_ROOT", "/workspace/data"),
@@ -221,6 +225,9 @@ func (c *Config) validate() error {
 		}
 		if strings.Contains(c.HTTP.PublicBaseURL, "127.0.0.1") {
 			problems = append(problems, "生产环境 PUBLIC_BASE_URL 不能是回环地址")
+		}
+		if c.Auth.DemoAuthBypass {
+			problems = append(problems, "生产环境禁止开启 DEMO_AUTH_BYPASS")
 		}
 	}
 

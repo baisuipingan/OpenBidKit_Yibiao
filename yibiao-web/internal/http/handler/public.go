@@ -10,12 +10,13 @@ import (
 
 // Public 提供无需登录的公开信息。
 type Public struct {
-	q *store.Queries
+	q              *store.Queries
+	demoAuthBypass bool
 }
 
 // NewPublic 创建 handler。
-func NewPublic(pool *pgxpool.Pool) *Public {
-	return &Public{q: store.New(pool)}
+func NewPublic(pool *pgxpool.Pool, demoAuthBypass bool) *Public {
+	return &Public{q: store.New(pool), demoAuthBypass: demoAuthBypass}
 }
 
 // Register 注册公开路由（无需登录）。
@@ -33,6 +34,9 @@ type BootstrapInfo struct {
 	MultiTenant bool `json:"multiTenant"`
 	// AppName 站点名称，便于白标部署
 	AppName string `json:"appName"`
+	// DemoAuthBypass 为 true 时，前端应跳过登录页，直接进入工作台。
+	// 由服务端 DEMO_AUTH_BYPASS 控制；关掉后恢复登录门禁。
+	DemoAuthBypass bool `json:"demoAuthBypass"`
 }
 
 // Bootstrap 返回登录页所需信息。
@@ -48,8 +52,9 @@ func (h *Public) Bootstrap(c echo.Context) error {
 	}
 
 	info := BootstrapInfo{
-		MultiTenant: count > 1,
-		AppName:     "标书工作台",
+		MultiTenant:    count > 1,
+		AppName:        "标书工作台",
+		DemoAuthBypass: h.demoAuthBypass,
 	}
 
 	if count == 1 {

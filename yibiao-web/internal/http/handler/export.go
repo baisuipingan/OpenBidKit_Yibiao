@@ -17,32 +17,58 @@ type Export struct {
 	planSvc *service.TechnicalPlanService
 }
 
-// NewExport 创建 handler。
+// NewExport 创建 handler。svc 可为 nil（未部署 OpenXmlHelper 时仍注册路由，避免 404）。
 func NewExport(svc *export.Service, planSvc *service.TechnicalPlanService) *Export {
 	return &Export{svc: svc, planSvc: planSvc}
 }
 
 // Register 注册路由。
+//
+// 同时挂 /export/word（文档约定）与 /export/export-word（前端 auto-kebab
+// `export.exportWord`），两者共用同一处理函数。
 func (h *Export) Register(g *echo.Group) {
 	g.POST("/export/word", h.ExportWord)
+	g.POST("/export/export-word", h.ExportWord)
 }
 
 // exportRequest 是导出请求。
 type exportRequest struct {
-	// TemplatePath 模板路径（服务端路径）。不传用内置模板。
+	// TemplatePath 模板路径（服务端路径）。不传时用项目保存的模板/内置 blank.docx。
 	TemplatePath string `json:"templatePath"`
+	// TemplateID 导出模板 ID（前端 generation config 的 exportTemplateId）
+	TemplateID string `json:"templateId"`
 	// TargetID 模板里正文占位符的 tag（默认 technical-plan）
 	TargetID string `json:"targetId"`
 	// NodeIDs 只导出指定节点（空表示全部有正文的）
 	NodeIDs []string `json:"nodeIds"`
 	// SkipLayoutCheck 跳过格式自检（调试用）
 	SkipLayoutCheck bool `json:"skipLayoutCheck"`
+	// RequestID / Source 对齐桌面版 payload（可忽略）
+	RequestID string `json:"requestId"`
+	Source    string `json:"source"`
+}
+
+// wordExportResponse 对齐桌面 WordExportResult，并附带 Web 下载字段。
+type wordExportResponse struct {
+	Success     bool     `json:"success"`
+	Path        string   `json:"path"`
+	Message     string   `json:"message"`
+	Warnings    []string `json:"warnings,omitempty"`
+	AssetID     string   `json:"assetId,omitempty"`
+	FileName    string   `json:"fileName,omitempty"`
+	SizeBytes   int64    `json:"sizeBytes,omitempty"`
+	DownloadURL string   `json:"downloadUrl,omitempty"`
 }
 
 // ExportWord 导出技术方案为 Word。
 //
 // 这是整条链路的终点：目录 + 正文 → 排版 → docx。
 func (h *Export) ExportWord(c echo.Context) error {
+	if h.svc == nil {
+		return httpx.Fail(c, "EXPORT_FAILED",
+			"Word 导出助手未配置（缺少 OPENXML_BINARY / OpenXmlHelper），请部署后再试")
+	}
+
 	tenantID, userID := identity(c)
 	projectID, err := projectID(c)
 	if err != nil {
@@ -65,13 +91,18 @@ func (h *Export) ExportWord(c echo.Context) error {
 		return httpx.Fail(c, "NO_OUTLINE", "目录为空，请先生成目录")
 	}
 
-	// 转成导出用的 Sections（只取有正文的）
+	// 转成导出用的 Sections（只取有正文的；必要时回填 contentGenerationSections）
 	flat := flattenOutline(state.Outline)
+	enrichFlatFromSections(flat, state.ContentGenerationSections)
 	sections := filterSections(flat, req.NodeIDs)
 	if len(sections) == 0 {
 		return httpx.Fail(c, "NO_CONTENT",
 			"没有任何章节有正文内容，请先生成正文")
 	}
+
+	templatePath := strings.TrimSpace(req.TemplatePath)
+	// 请求未带本地模板路径时走内置 blank.docx；保存的 exportTemplateId 是版式配置，不是 .docx 路径。
+	_ = firstNonEmpty(req.TemplateID, state.ExportTemplateID)
 
 	result, err := h.svc.ExportWord(c.Request().Context(), export.Request{
 		TenantID:     tenantID,
@@ -79,14 +110,33 @@ func (h *Export) ExportWord(c echo.Context) error {
 		OwnerID:      userID,
 		ProjectName:  firstNonEmpty(state.OutlineProjectName, state.TenderFileName, "技术方案"),
 		Sections:     sections,
-		TemplatePath: req.TemplatePath,
+		TemplatePath: templatePath,
 		TargetID:     req.TargetID,
 	})
 	if err != nil {
 		return httpx.Fail(c, "EXPORT_FAILED", err.Error())
 	}
 
-	return httpx.OK(c, result)
+	downloadURL := result.DownloadURL
+	if downloadURL == "" && result.AssetID != "" {
+		downloadURL = "/api/assets/" + result.AssetID + "/download"
+	}
+	msg := "Word 已导出，请打开文档核对图片、表格和版式。"
+	var warnings []string
+	if result.Warning != "" {
+		warnings = []string{result.Warning}
+	}
+
+	return httpx.OK(c, wordExportResponse{
+		Success:     true,
+		Path:        downloadURL,
+		Message:     msg,
+		Warnings:    warnings,
+		AssetID:     result.AssetID,
+		FileName:    result.FileName,
+		SizeBytes:   result.SizeBytes,
+		DownloadURL: downloadURL,
+	})
 }
 
 // flatEntry 是拍平后的目录项。
@@ -135,6 +185,30 @@ func flattenOutline(nodes []service.OutlineNode) []flatEntry {
 	}
 	walk(roots, 1)
 	return out
+}
+
+// enrichFlatFromSections 用 contentGenerationSections 回填空节点正文。
+func enrichFlatFromSections(flat []flatEntry, sections map[string]any) {
+	if len(sections) == 0 {
+		return
+	}
+	for i := range flat {
+		if len([]rune(strings.TrimSpace(flat[i].Content))) >= 10 {
+			continue
+		}
+		raw, ok := sections[flat[i].NodeID]
+		if !ok {
+			continue
+		}
+		m, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		content, _ := m["content"].(string)
+		if len([]rune(strings.TrimSpace(content))) >= 10 {
+			flat[i].Content = content
+		}
+	}
 }
 
 // sortNodes 按 sortOrder 排序（插入排序，目录通常不大）。

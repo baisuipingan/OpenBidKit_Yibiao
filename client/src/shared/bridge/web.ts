@@ -22,6 +22,24 @@ export function getAccessToken(): string {
   return localStorage.getItem(TOKEN_KEY) || '';
 }
 
+/**
+ * 演示旁路开关（由 AuthGate 根据 /public/bootstrap.demoAuthBypass 写入）。
+ *
+ * 打开后：
+ *   - 允许无 access token 发起业务请求（服务端会注入默认管理员）
+ *   - 401 不再强制跳登录页
+ * 关闭后行为与正式登录一致。登录/租户代码仍保留。
+ */
+let demoAuthBypass = false;
+
+export function setDemoAuthBypass(enabled: boolean) {
+  demoAuthBypass = enabled;
+}
+
+export function isDemoAuthBypass(): boolean {
+  return demoAuthBypass;
+}
+
 export function setTokens(access: string, refresh: string) {
   localStorage.setItem(TOKEN_KEY, access);
   localStorage.setItem(REFRESH_KEY, refresh);
@@ -86,16 +104,18 @@ async function ensureProject(): Promise<string> {
 
   const attempt = (async () => {
     const token = getAccessToken();
-    // 没有 token 时不发请求（登录前会 401，白白浪费）
-    if (!token) return '';
+    // 没有 token 且非演示旁路时不发请求（登录前会 401，白白浪费）
+    if (!token && !demoAuthBypass) return '';
 
     try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) headers.Authorization = `Bearer ${token}`;
+
       const res = await fetch(`${API_BASE}/projects/current`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
+        headers,
         body: '{}',
       });
       if (!res.ok) {
@@ -142,16 +162,18 @@ async function ensureProject(): Promise<string> {
 export async function ensureProjectValid(): Promise<string> {
   const existing = getProjectId();
   const token = getAccessToken();
-  if (!existing || !token) return ensureProject();
+  if (!existing || (!token && !demoAuthBypass)) return ensureProject();
 
   try {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'X-Project-Id': existing,
+    };
+    if (token) headers.Authorization = `Bearer ${token}`;
+
     const res = await fetch(`${API_BASE}/projects/select`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-        'X-Project-Id': existing,
-      },
+      headers,
       body: JSON.stringify({ projectId: existing }),
     });
     if (res.ok) return existing;
@@ -259,8 +281,12 @@ async function request<T>(path: string, body?: unknown, opts?: { retry?: boolean
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 
-  // 401：尝试刷新一次，失败则跳登录
+  // 401：尝试刷新一次，失败则跳登录（演示旁路除外）
   if (res.status === 401 && opts?.retry !== false) {
+    if (demoAuthBypass) {
+      throw new BridgeError('UNAUTHORIZED', '演示旁路下请求仍返回 401，请检查服务端 DEMO_AUTH_BYPASS');
+    }
+
     const refreshed = await tryRefresh();
     if (refreshed) return request<T>(path, body, { retry: false });
 
@@ -278,7 +304,8 @@ async function request<T>(path: string, body?: unknown, opts?: { retry?: boolean
 
   if (!envelope.ok) {
     const err = envelope.error || { code: 'UNKNOWN', message: '未知错误' };
-    throw new BridgeError(err.code, err.message, err.detail);
+    const message = String(err.message || '').trim() || err.code || '未知错误';
+    throw new BridgeError(err.code || 'UNKNOWN', message, err.detail);
   }
 
   return envelope.data as T;
@@ -552,6 +579,27 @@ const WEB_NOOP_HANDLERS: Record<string, (...args: any[]) => unknown> = {
   'config.freeLicenseDays': () => Promise.resolve(0),
   'config.expirePopupEnabled': () => Promise.resolve(false),
   'config.expirePopupDismissible': () => Promise.resolve(true),
+  /** 桌面版打开 userData 配置目录；Web 版无本地目录 */
+  'config.openConfigFolder': () => Promise.resolve({ success: true, message: 'Web 版无本地配置目录' }),
+
+  /** 智能体自检报告：桌面版写文件；Web 版触发浏览器下载 */
+  'agent.exportSelfCheckReport': (payload: unknown) => {
+    const report = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+    const text = typeof report.detail_text === 'string' && report.detail_text
+      ? report.detail_text
+      : JSON.stringify(report, null, 2);
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `pi-agent-self-check-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.txt`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+    return Promise.resolve({ success: true, message: '智能体自检报告已下载', path: link.download });
+  },
+
+  /** 开发者独立窗口：Web 版不提供 */
+  'developerTokenStats.openWindow': () => Promise.resolve({ success: false, message: 'Web 版不支持独立开发者窗口' }),
+  'developerAgentMonitor.openWindow': () => Promise.resolve({ success: false, message: 'Web 版不支持独立开发者窗口' }),
 
   /** 插件：Web 版不支持本地插件 */
   'plugins.getAvailablePlugins': () => Promise.resolve([]),
@@ -964,20 +1012,9 @@ const NS_LOCAL: Record<string, (...args: any[]) => unknown> = {
    */
   'technicalPlan.saveGenerationConfig': (payload: unknown) => {
     const p = (payload || {}) as Record<string, any>;
-
-    // 目前只实现了参考知识库这一个字段
-    if (Array.isArray(p.referenceKnowledgeDocumentIds)) {
-      return request('/technical-plan/save-reference-knowledge', {
-        documentIds: p.referenceKnowledgeDocumentIds,
-      }).then(() => ({
-        // 前端会读 saved.referenceKnowledgeDocumentIds，原样回传
-        referenceKnowledgeDocumentIds: p.referenceKnowledgeDocumentIds,
-      }));
-    }
-
-    // 其他字段暂不支持，返回空对象让前端不报错
-    console.warn('[bridge] saveGenerationConfig 暂不支持的字段:', Object.keys(p));
-    return Promise.resolve({});
+    // 统一走后端 save-generation-config：局部字段合并后回传完整配置，
+    // 避免返回 {} 导致 TechnicalPlanHome 把 outlineMode 等写成 undefined 白屏。
+    return request('/technical-plan/save-generation-config', p);
   },
 
   /**
@@ -989,9 +1026,12 @@ const NS_LOCAL: Record<string, (...args: any[]) => unknown> = {
   'tasks.startContentGeneration': (payload: unknown) => {
     const p = (payload || {}) as Record<string, any>;
     const options = (p.generationOptions || {}) as Record<string, any>;
+    const word = (p.outlineWordControlSnapshot || p.wordControl || options.outlineWordControlSnapshot || {}) as Record<string, any>;
 
-    // 配图开关：三个都关 = 不配图
-    const useImages = Boolean(options.useAiImages || options.useMermaidImages || options.useHtmlImages);
+    // 配图：配图 0% / 无 时必须 disableImages，不能仅靠 type 开关（默认 mermaid/html 常为 true）。
+    const imageQuantity = Number(options.imageQuantity ?? 0);
+    const typeEnabled = Boolean(options.useAiImages || options.useMermaidImages || options.useHtmlImages);
+    const useImages = imageQuantity > 0 && typeEnabled;
 
     const body: Record<string, unknown> = {
       force: Boolean(p.regenerate),
@@ -1000,9 +1040,19 @@ const NS_LOCAL: Record<string, (...args: any[]) => unknown> = {
       disableKnowledge: options.useKnowledge === false,
     };
 
-    // 图片数量：桌面版是数字，Web 后端也是
-    if (typeof options.imageQuantity === 'number') {
-      body.totalImages = options.imageQuantity;
+    // 字数：有全文总量时只传 totalWords，让服务端按叶子均分；不要再带 sectionWords 当每节目标。
+    const totalWords = Number(p.totalWords ?? word.minimumWords ?? word.maximumWords ?? 0);
+    const sectionWords = Number(p.targetWordsPerSection ?? word.sectionWords ?? 0);
+    if (totalWords > 0) {
+      body.totalWords = totalWords;
+    } else if (sectionWords > 0) {
+      body.targetWordsPerSection = sectionWords;
+    }
+
+    if (useImages) {
+      body.totalImages = imageQuantity;
+    } else {
+      body.totalImages = 0;
     }
 
     // 图片类型
@@ -1020,6 +1070,61 @@ const NS_LOCAL: Record<string, (...args: any[]) => unknown> = {
     const token = getAccessToken();
     const base = (import.meta as any).env?.VITE_API_BASE || '';
     return `${base}/api/assets/${encodeURIComponent(assetId)}/download?access_token=${encodeURIComponent(token)}`;
+  },
+
+  /**
+   * Word 导出：走文档约定的 /export/word（同时后端也挂了 /export/export-word 别名）。
+   * 返回桌面版 WordExportResult，并触发浏览器下载 .docx。
+   */
+  'export.exportWord': async (payload: unknown) => {
+    const data = await request<Record<string, any>>('/export/word', payload || {});
+    const assetId = String(data.assetId || '');
+    const fileName = String(data.fileName || '技术方案.docx');
+    const token = getAccessToken();
+    const base = (import.meta as any).env?.VITE_API_BASE || '';
+    let downloadUrl = String(data.downloadUrl || data.path || '');
+    if (assetId) {
+      downloadUrl = `${base}/api/assets/${encodeURIComponent(assetId)}/download?access_token=${encodeURIComponent(token)}`;
+    } else if (downloadUrl && !/^https?:\/\//i.test(downloadUrl)) {
+      const sep = downloadUrl.includes('?') ? '&' : '?';
+      downloadUrl = `${base}${downloadUrl.startsWith('/') ? '' : '/'}${downloadUrl}${sep}access_token=${encodeURIComponent(token)}`;
+    }
+
+    if (downloadUrl && typeof document !== 'undefined') {
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = fileName;
+      link.rel = 'noopener';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    }
+
+    const warnings = Array.isArray(data.warnings)
+      ? data.warnings.map(String)
+      : (data.warning ? [String(data.warning)] : undefined);
+
+    return {
+      success: data.success !== false,
+      path: downloadUrl,
+      message: String(data.message || 'Word 已导出'),
+      warnings,
+      assetId: assetId || undefined,
+      fileName,
+      downloadUrl,
+    };
+  },
+
+  /** Web：打开/再次下载导出文件（path 通常是带 token 的下载 URL）。 */
+  'export.openFile': async (filePath: unknown) => {
+    const url = typeof filePath === 'string' ? filePath.trim() : '';
+    if (!url) {
+      throw new BridgeError('INVALID_ARGUMENT', '缺少文件路径');
+    }
+    if (typeof window !== 'undefined') {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+    return { success: true };
   },
 };
 
@@ -1121,6 +1226,7 @@ const POSITIONAL_ARGS: Record<string, string[]> = {
   'technicalPlan.selectBidSection': ['sectionId'],
   'technicalPlan.readTenderSourceMarkdown': ['sourceId'],
   'technicalPlan.removeTenderDocument': ['sourceId'],
+  'technicalPlan.saveGlobalFacts': ['globalFacts'],
   'technicalPlan.saveSectionContent': ['nodeId', 'content'],
   'knowledgeBase.uploadDocuments': ['folderId', 'filePaths'],
   'knowledgeBase.renameFolder': ['folderId', 'name'],

@@ -512,14 +512,21 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
         const continueAnyway = await confirmOutlineWordControlLeave();
         if (!continueAnyway) return;
       }
-      const inspection = await window.yibiao!.technicalPlan.inspectBidTemplate();
-      if (inspection.added.length || inspection.changed.length) {
-        const choice = await confirmBidTemplateMismatch(inspection);
-        if (choice === 'cancel') return;
-        if (choice === 'extract') {
-          await startBidTemplateExtraction();
-          return;
+      // 投标模版核对失败不得把用户卡在目录页：字数警告已确认「仍然继续」后必须能前进。
+      try {
+        const inspection = await window.yibiao!.technicalPlan.inspectBidTemplate();
+        const added = Array.isArray(inspection?.added) ? inspection.added : [];
+        const changed = Array.isArray(inspection?.changed) ? inspection.changed : [];
+        if (added.length || changed.length) {
+          const choice = await confirmBidTemplateMismatch({ added, changed });
+          if (choice === 'cancel') return;
+          if (choice === 'extract') {
+            await startBidTemplateExtraction();
+            return;
+          }
         }
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : '核对投标模版失败，已跳过并继续', 'info');
       }
       targetStep = shouldSkipGlobalFacts(finalOutlineData) ? 'content-edit' : 'global-facts';
     }
@@ -962,38 +969,44 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
 
   const saveGenerationOutlineMode = async (outlineMode: TechnicalPlanState['outlineMode']) => {
     const saved = await window.yibiao!.technicalPlan.saveGenerationConfig({ outlineMode });
-    setState((prev) => ({ ...prev, outlineMode: saved.outlineMode }));
+    setState((prev) => ({ ...prev, outlineMode: saved?.outlineMode ?? outlineMode }));
   };
 
   const saveGenerationOutlineExpansionMode = async (outlineExpansionMode: TechnicalPlanState['outlineExpansionMode']) => {
     const saved = await window.yibiao!.technicalPlan.saveGenerationConfig({ outlineExpansionMode });
-    setState((prev) => ({ ...prev, outlineExpansionMode: saved.outlineExpansionMode }));
+    setState((prev) => ({ ...prev, outlineExpansionMode: saved?.outlineExpansionMode ?? outlineExpansionMode }));
   };
 
   const saveGenerationWordControlOptions = async (outlineWordControlOptions: OutlineWordControlOptions) => {
     const saved = await window.yibiao!.technicalPlan.saveGenerationConfig({ outlineWordControlOptions });
-    setState((prev) => ({ ...prev, outlineWordControlOptions: saved.outlineWordControlOptions }));
+    setState((prev) => ({
+      ...prev,
+      outlineWordControlOptions: saved?.outlineWordControlOptions ?? outlineWordControlOptions,
+    }));
   };
 
   const saveGenerationReferenceKnowledge = async (referenceKnowledgeDocumentIds: string[]) => {
     const saved = await window.yibiao!.technicalPlan.saveGenerationConfig({ referenceKnowledgeDocumentIds });
-    setState((prev) => ({ ...prev, referenceKnowledgeDocumentIds: saved.referenceKnowledgeDocumentIds }));
+    setState((prev) => ({
+      ...prev,
+      referenceKnowledgeDocumentIds: saved?.referenceKnowledgeDocumentIds ?? referenceKnowledgeDocumentIds,
+    }));
   };
 
   const saveGenerationGlobalFactsMode = async (globalFactsMode: GlobalFactsMode) => {
     const saved = await window.yibiao!.technicalPlan.saveGenerationConfig({ globalFactsMode });
-    setState((prev) => ({ ...prev, globalFactsMode: saved.globalFactsMode }));
+    setState((prev) => ({ ...prev, globalFactsMode: saved?.globalFactsMode ?? globalFactsMode }));
   };
 
   const saveGenerationExportTemplate = async (exportTemplateId: string) => {
     const saved = await window.yibiao!.technicalPlan.saveGenerationConfig({ exportTemplateId });
-    setState((prev) => ({ ...prev, exportTemplateId: saved.exportTemplateId }));
+    setState((prev) => ({ ...prev, exportTemplateId: saved?.exportTemplateId ?? exportTemplateId }));
   };
 
   // 独立保存模板样式范围，只合并本字段，避免覆盖同时保存的模板和任务状态。
   const saveGenerationExportTemplateScope = async (exportTemplateScope: ExportTemplateScope) => {
     const saved = await window.yibiao!.technicalPlan.saveGenerationConfig({ exportTemplateScope });
-    setState((prev) => ({ ...prev, exportTemplateScope: saved.exportTemplateScope }));
+    setState((prev) => ({ ...prev, exportTemplateScope: saved?.exportTemplateScope ?? exportTemplateScope }));
   };
 
   const handleExportTemplateSaved = async (template: ExportTemplateRecord) => {

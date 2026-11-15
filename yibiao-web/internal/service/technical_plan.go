@@ -68,22 +68,30 @@ type OutlineItem struct {
 	SortOrder  int32 `json:"sortOrder"`
 }
 
-// TenderFile 是招标文件条目。
+// TenderFile 同时覆盖前端的：
+//   - TechnicalPlanTenderSourceFile（tenderFiles[]）
+//   - TechnicalPlanTenderFile（tenderFile 单数）
+//   - TechnicalPlanOriginalPlanFile（originalPlanFile）
 //
-// 字段与前端 TechnicalPlanTenderSourceFile 严格对齐，
-// 缺字段会导致前端读 undefined 报错。
+// 单数对象比列表项多 selectedSection* / originalMarkdown*；
+// 多出来的 id 字段对前端无害。缺 tenderFile 会让「下一步」一直禁用。
 type TenderFile struct {
 	// ID 是稳定标识。Web 版没有本地路径，用文件名哈希做 ID。
-	ID       string `json:"id"`
+	ID       string `json:"id,omitempty"`
 	FileName string `json:"fileName"`
-	// MarkdownPath 前端在用，Web 版存资产引用
-	MarkdownPath   string `json:"markdownPath"`
-	MarkdownChars  int32  `json:"markdownChars"`
-	ContentHash    string `json:"contentHash"`
-	ParserLabel    string `json:"parserLabel,omitempty"`
-	SourceDocxPath string `json:"sourceDocxPath,omitempty"`
-	ImportedAt     string `json:"importedAt,omitempty"`
-	UpdatedAt      string `json:"updatedAt"`
+	// MarkdownPath 前端在用；Web 版常为空路径，用资产名占位（如 tender.md）
+	MarkdownPath          string `json:"markdownPath"`
+	MarkdownChars         int32  `json:"markdownChars"`
+	ContentHash           string `json:"contentHash"`
+	OriginalMarkdownPath  string `json:"originalMarkdownPath,omitempty"`
+	OriginalMarkdownChars int32  `json:"originalMarkdownChars,omitempty"`
+	OriginalContentHash   string `json:"originalContentHash,omitempty"`
+	ParserLabel           string `json:"parserLabel,omitempty"`
+	SourceDocxPath        string `json:"sourceDocxPath,omitempty"`
+	ImportedAt            string `json:"importedAt,omitempty"`
+	SelectedSectionID     string `json:"selectedSectionId,omitempty"`
+	SelectedSectionTitle  string `json:"selectedSectionTitle,omitempty"`
+	UpdatedAt             string `json:"updatedAt"`
 }
 
 // PlanState 是前端 `technicalPlan.loadState()` 期望的返回结构。
@@ -124,16 +132,22 @@ type PlanState struct {
 	BidAnalysisSelectedIDs     []string       `json:"bidAnalysisSelectedTaskIds"`
 	BidAnalysisTasks           map[string]any `json:"bidAnalysisTasks"`
 	BidAnalysisProgress        int            `json:"bidAnalysisProgress"`
+	BidAnalysisTask            map[string]any `json:"bidAnalysisTask"`
 	BidSectionMode             string         `json:"bidSectionMode"`
 	BidSectionExtractionStatus string         `json:"bidSectionExtractionStatus"`
 	OutlineMode                string         `json:"outlineMode"`
 	OutlineExpansionMode       string         `json:"outlineExpansionMode"`
 	OutlineWordControlOptions  map[string]any `json:"outlineWordControlOptions"`
+	OutlineWordControlSnapshot map[string]any `json:"outlineWordControlSnapshot"`
+	OutlineGenerationTask      map[string]any `json:"outlineGenerationTask"`
 	ReferenceKnowledgeIDs      []string       `json:"referenceKnowledgeDocumentIds"`
 	GlobalFactsMode            string         `json:"globalFactsMode"`
 	GlobalFacts                []any          `json:"globalFacts"`
+	GlobalFactsTask            map[string]any `json:"globalFactsTask"`
 	ExportTemplateID           string         `json:"exportTemplateId"`
 	ExportTemplateScope        string         `json:"exportTemplateScope"`
+	ContentGenerationOptions   map[string]any `json:"contentGenerationOptions"`
+	ContentGenerationTask      map[string]any `json:"contentGenerationTask"`
 	ContentGenerationSections  map[string]any `json:"contentGenerationSections"`
 	// ContentGenerationRuntime 是正文生成运行时状态。
 	// 前端从这里读 section_words 显示每节字数。
@@ -327,16 +341,26 @@ func toPlanState(
 		step = "document-analysis"
 	}
 
+	tenderFiles := parseTenderFiles(meta.TenderFiles, meta)
+
 	st := &PlanState{
 		Step:        step,
-		TenderFiles: parseTenderFiles(meta.TenderFiles, meta),
+		TenderFiles: tenderFiles,
+		// 单数 tenderFile / originalPlanFile：前端「下一步」和后续步骤门禁读它们。
+		// 不能只靠 tender_markdown_path——Web 导入把路径写成空串，改用资产引用。
+		TenderFile:       buildSingularTenderFile(meta, tenderFiles),
+		OriginalPlanFile: buildOriginalPlanFile(meta),
 		// 目录树：前端渲染目录/正文页必需
 		OutlineData: buildOutlineData(nodes),
 		// 以下字段给默认值，避免前端读 undefined
 		BidAnalysisTasks:          map[string]any{},
 		BidAnalysisSelectedIDs:    []string{},
-		ReferenceKnowledgeIDs:     []string{},
+		BidAnalysisTask:           nil,
+		OutlineGenerationTask:     nil,
+		ContentGenerationTask:     nil,
+		ReferenceKnowledgeIDs:     append([]string{}, meta.ReferenceKnowledgeDocumentIds...),
 		GlobalFacts:               []any{},
+		GlobalFactsTask:           nil,
 		ContentGenerationSections: map[string]any{},
 		ContentGenerationRuntime:  buildContentRuntime(nodes),
 		ContentGenerationPlans:    map[string]any{},
@@ -369,6 +393,22 @@ func toPlanState(
 			"maximumWords": cfg.MaximumWords,
 			"sectionWords": cfg.SectionWords,
 		},
+		// 目录生效时的字数快照：下一步门禁读它；缺则「请重新生成目录」
+		OutlineWordControlSnapshot: parseWordControlSnapshot(meta.OutlineWordControlSnapshot),
+		ContentGenerationOptions: map[string]any{
+			"useAiImages":           cfg.UseAiImages,
+			"useMermaidImages":      cfg.UseMermaidImages,
+			"useHtmlImages":         cfg.UseHtmlImages,
+			"tableRequirement":      cfg.TableRequirement,
+			"imageQuantity":         cfg.ImageQuantity,
+			"layoutCheck":           cfg.LayoutCheck,
+			"useSingleImageLayout":  cfg.UseSingleImageLayout,
+			"useImageTextLayout":    cfg.UseImageTextLayout,
+			"useThreeImagesLayout":  cfg.UseThreeImagesLayout,
+			"useFourImagesLayout":   cfg.UseFourImagesLayout,
+			"htmlImageOptimization": cfg.HtmlImageOptimization,
+			"wordCountRepair":       cfg.WordCountRepair,
+		},
 	}
 
 	if meta.TenderImportedAt.Valid {
@@ -390,8 +430,23 @@ func toPlanState(
 			if v, ok := extra["globalFacts"].([]any); ok {
 				st.GlobalFacts = v
 			}
+			if v, ok := extra["globalFactsTask"].(map[string]any); ok {
+				st.GlobalFactsTask = v
+			}
 			if v, ok := extra["bidAnalysisTasks"].(map[string]any); ok {
 				st.BidAnalysisTasks = v
+			}
+			if v, ok := extra["bidAnalysisTask"].(map[string]any); ok {
+				st.BidAnalysisTask = v
+			}
+			if v, ok := extra["outlineGenerationTask"].(map[string]any); ok {
+				st.OutlineGenerationTask = v
+			}
+			if v, ok := extra["contentGenerationTask"].(map[string]any); ok {
+				st.ContentGenerationTask = v
+			}
+			if v, ok := extra["bidAnalysisProgress"].(float64); ok {
+				st.BidAnalysisProgress = int(v)
 			}
 			if v, ok := extra["bidAnalysisSelectedTaskIds"].([]any); ok {
 				ids := make([]string, 0, len(v))
@@ -407,6 +462,17 @@ func toPlanState(
 			}
 			if v, ok := extra["contentGenerationPlans"].(map[string]any); ok {
 				st.ContentGenerationPlans = v
+			}
+			if v, ok := extra["contentGenerationOptions"].(map[string]any); ok {
+				// extra 覆盖列默认值（兼容旧只写 extra 的路径）
+				merged := st.ContentGenerationOptions
+				if merged == nil {
+					merged = map[string]any{}
+				}
+				for k, val := range v {
+					merged[k] = val
+				}
+				st.ContentGenerationOptions = merged
 			}
 			// 分析结果提到顶层，前端 BidAnalysisPage 直接读这两个字段
 			if v, ok := extra["projectOverview"].(string); ok && v != "" {
@@ -535,8 +601,10 @@ func buildContentRuntime(nodes []store.TechnicalPlanOutlineNode) map[string]any 
 // 数据库存的是平铺列表（parent_node_id + sort_order），
 // 前端要的是嵌套 children 结构。
 func buildOutlineData(nodes []store.TechnicalPlanOutlineNode) *OutlineData {
+	// 空目录必须返回 nil：前端用 outlineData 真值判断「已生成」，
+	// 空对象会让进度条显示 100% 且 0 章。
 	if len(nodes) == 0 {
-		return &OutlineData{Outline: []OutlineItem{}}
+		return nil
 	}
 
 	// 建索引
@@ -618,6 +686,112 @@ func buildOutlineData(nodes []store.TechnicalPlanOutlineNode) *OutlineData {
 	return &OutlineData{Outline: tree}
 }
 
+// buildSingularTenderFile 构造前端 TechnicalPlanTenderFile。
+//
+// Web 导入把 TenderMarkdownPath 写成 ""（资产引用），所以不能像桌面版那样
+// 只看 path 是否非空；只要 tenderFiles 有条目，或 markdown chars/hash 已写入，
+// 就返回非 null，否则「下一步」会一直 disabled。
+func buildSingularTenderFile(meta store.TechnicalPlanMetum, files []TenderFile) *TenderFile {
+	if len(files) == 0 && meta.TenderMarkdownChars <= 0 && meta.TenderMarkdownHash == "" {
+		return nil
+	}
+
+	fileName := firstTenderFileName(meta.TenderFiles)
+	parserLabel := meta.TenderParserLabel
+	chars := meta.TenderMarkdownChars
+	id := ""
+	markdownPath := meta.TenderMarkdownPath
+
+	if len(files) > 0 {
+		id = files[0].ID
+		if fileName == "" {
+			fileName = files[0].FileName
+		}
+		if chars <= 0 {
+			chars = files[0].MarkdownChars
+		}
+		if parserLabel == "" {
+			parserLabel = files[0].ParserLabel
+		}
+		if markdownPath == "" {
+			markdownPath = files[0].MarkdownPath
+		}
+	}
+	if fileName == "" {
+		fileName = "技术方案招标文件"
+	}
+	if markdownPath == "" {
+		markdownPath = "tender.md"
+	}
+
+	importedAt := ""
+	if meta.TenderImportedAt.Valid {
+		importedAt = meta.TenderImportedAt.Time.UTC().Format(time.RFC3339)
+	}
+
+	origPath := meta.TenderOriginalMarkdownPath
+	if origPath == "" {
+		origPath = markdownPath
+	}
+	origChars := meta.TenderOriginalMarkdownChars
+	if origChars <= 0 {
+		origChars = chars
+	}
+	origHash := meta.TenderOriginalMarkdownHash
+	if origHash == "" {
+		origHash = meta.TenderMarkdownHash
+	}
+
+	return &TenderFile{
+		ID:                    id,
+		FileName:              fileName,
+		MarkdownPath:          markdownPath,
+		MarkdownChars:         chars,
+		ContentHash:           meta.TenderMarkdownHash,
+		OriginalMarkdownPath:  origPath,
+		OriginalMarkdownChars: origChars,
+		OriginalContentHash:   origHash,
+		ParserLabel:           parserLabel,
+		ImportedAt:            importedAt,
+		SelectedSectionID:     meta.SelectedSectionID,
+		SelectedSectionTitle:  meta.SelectedSectionTitle,
+		UpdatedAt:             meta.UpdatedAt.UTC().Format(time.RFC3339),
+	}
+}
+
+// buildOriginalPlanFile 构造前端 originalPlanFile。
+// 与 tenderFile 同类：Web 导入路径可为空，靠文件名/字数/hash 判断已导入。
+func buildOriginalPlanFile(meta store.TechnicalPlanMetum) *TenderFile {
+	if meta.OriginalPlanFileName == "" && meta.OriginalPlanMarkdownChars <= 0 && meta.OriginalPlanMarkdownHash == "" {
+		return nil
+	}
+
+	markdownPath := meta.OriginalPlanMarkdownPath
+	if markdownPath == "" {
+		markdownPath = "original-plan.md"
+	}
+
+	importedAt := ""
+	if meta.OriginalPlanImportedAt.Valid {
+		importedAt = meta.OriginalPlanImportedAt.Time.UTC().Format(time.RFC3339)
+	}
+
+	fileName := meta.OriginalPlanFileName
+	if fileName == "" {
+		fileName = "原方案"
+	}
+
+	return &TenderFile{
+		FileName:      fileName,
+		MarkdownPath:  markdownPath,
+		MarkdownChars: meta.OriginalPlanMarkdownChars,
+		ContentHash:   meta.OriginalPlanMarkdownHash,
+		ParserLabel:   meta.OriginalPlanParserLabel,
+		ImportedAt:    importedAt,
+		UpdatedAt:     meta.UpdatedAt.UTC().Format(time.RFC3339),
+	}
+}
+
 // parseTenderFiles 把数据库里的 JSON 转成前端要的数组。
 //
 // 数据库里 tender_files 存的是 [{fileName, chars, parserLabel}]，
@@ -671,6 +845,28 @@ func parseTenderFiles(raw []byte, meta store.TechnicalPlanMetum) []TenderFile {
 func shortHash(s string) string {
 	h := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(h[:4])
+}
+
+// parseWordControlSnapshot 把 meta 列 JSONB 还原成前端 outlineWordControlSnapshot。
+func parseWordControlSnapshot(raw []byte) map[string]any {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil || out == nil {
+		return nil
+	}
+	// 统一成 int 友好的数值（JSONB 数字是 float64）
+	normalized := map[string]any{}
+	for _, key := range []string{"minimumWords", "maximumWords", "sectionWords"} {
+		if n, ok := asInt32(out[key]); ok {
+			normalized[key] = n
+		}
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
 }
 
 func firstTenderFileName(raw []byte) string {

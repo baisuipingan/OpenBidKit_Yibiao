@@ -145,6 +145,17 @@ type StartOptions struct {
 	Resume *ResumeState
 
 	OnEvent func(agent.TaskEvent)
+	// OnProgress 工作区小节进度回调（增量，可在整任务完成前多次触发）。
+	OnProgress func(ProgressSnapshot)
+}
+
+// ProgressSnapshot 是正文生成中的增量进度。
+type ProgressSnapshot struct {
+	TaskID     string
+	DoneCount  int
+	TotalCount int
+	Progress   int
+	Sections   map[string]any
 }
 
 // ResumeState 是恢复状态。
@@ -263,13 +274,67 @@ func (r *Runner) Start(ctx context.Context, opts StartOptions) (*Result, error) 
 		return nil, err
 	}
 
-	return &Result{TaskID: handle.TaskID, SectionCount: len(opts.Sections)}, nil
+	if opts.OnProgress != nil && handle.WorkspaceDir != "" {
+		go r.pollWorkspaceProgress(handle.TaskID, handle.WorkspaceDir, opts.Sections, opts.OnProgress)
+	}
+
+	return &Result{
+		TaskID:       handle.TaskID,
+		SectionCount: len(opts.Sections),
+		WorkspaceDir: handle.WorkspaceDir,
+	}, nil
 }
 
 // Result 是生成结果。
 type Result struct {
 	TaskID       string `json:"taskId"`
 	SectionCount int    `json:"sectionCount"`
+	WorkspaceDir string `json:"workspaceDir,omitempty"`
+}
+
+// pollWorkspaceProgress 定时扫描工作区，把已完成小节推给业务层。
+func (r *Runner) pollWorkspaceProgress(
+	taskID, workspaceDir string,
+	sections []Section,
+	onProgress func(ProgressSnapshot),
+) {
+	if onProgress == nil {
+		return
+	}
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	lastDone := -1
+	deadline := time.Now().Add(2*time.Hour + 5*time.Minute)
+	for time.Now().Before(deadline) {
+		<-ticker.C
+		if _, err := os.Stat(workspaceDir); err != nil {
+			return
+		}
+		items, done := ScanWorkspaceProgress(workspaceDir, sections)
+		if done == lastDone {
+			continue
+		}
+		lastDone = done
+		total := len(sections)
+		progress := 10
+		if total > 0 {
+			progress = 10 + (done * 80 / total)
+			if progress > 95 {
+				progress = 95
+			}
+		}
+		onProgress(ProgressSnapshot{
+			TaskID:     taskID,
+			DoneCount:  done,
+			TotalCount: total,
+			Progress:   progress,
+			Sections:   ProgressMap(items),
+		})
+		if done >= total && total > 0 {
+			return
+		}
+	}
 }
 
 // CollectResult 收集生成结果。

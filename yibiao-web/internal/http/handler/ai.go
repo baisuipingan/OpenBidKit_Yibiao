@@ -148,6 +148,9 @@ func (a *AI) RequestJSON(c echo.Context) error {
 }
 
 // testImageRequest 是生图测试请求。
+//
+// 前端设置页「测试」传的是整个 ClientConfig（含 image_model），
+// 也兼容早期 provider / config 两种嵌套写法。
 type testImageRequest struct {
 	Provider *struct {
 		BaseURL string `json:"baseUrl"`
@@ -160,6 +163,33 @@ type testImageRequest struct {
 		APIKey   string `json:"api_key"`
 		Model    string `json:"model_name"`
 	} `json:"config"`
+	ImageModel *struct {
+		Provider string `json:"provider"`
+		BaseURL  string `json:"base_url"`
+		APIKey   string `json:"api_key"`
+		Model    string `json:"model_name"`
+	} `json:"image_model"`
+}
+
+// configuredAPIKeyPlaceholder 与 config handler 返回给前端的占位符一致。
+// 前端测试时会把这个占位符原样传回，服务端应改用库里存的真实 Key。
+const configuredAPIKeyPlaceholder = "__CONFIGURED__"
+
+// pickImageTestCredentials 从请求体解析生图测试用的 Base URL / Key / 模型。
+//
+// 优先级：provider → config → image_model（ClientConfig）→ 调用方提供的回退值。
+// 返回的 usedRequest 表示是否用了请求里显式携带的地址（相对租户库回退）。
+func pickImageTestCredentials(req testImageRequest, fallbackBase, fallbackKey, fallbackModel string) (baseURL, apiKey, model string, usedRequest bool) {
+	switch {
+	case req.Provider != nil && strings.TrimSpace(req.Provider.BaseURL) != "":
+		return strings.TrimSpace(req.Provider.BaseURL), strings.TrimSpace(req.Provider.APIKey), strings.TrimSpace(req.Provider.Model), true
+	case req.Config != nil && strings.TrimSpace(req.Config.BaseURL) != "":
+		return strings.TrimSpace(req.Config.BaseURL), strings.TrimSpace(req.Config.APIKey), strings.TrimSpace(req.Config.Model), true
+	case req.ImageModel != nil && strings.TrimSpace(req.ImageModel.BaseURL) != "":
+		return strings.TrimSpace(req.ImageModel.BaseURL), strings.TrimSpace(req.ImageModel.APIKey), strings.TrimSpace(req.ImageModel.Model), true
+	default:
+		return strings.TrimSpace(fallbackBase), strings.TrimSpace(fallbackKey), strings.TrimSpace(fallbackModel), false
+	}
 }
 
 // TestImageModel 测试生图服务连通性。
@@ -174,22 +204,25 @@ func (a *AI) TestImageModel(c echo.Context) error {
 		return httpx.BadRequest("请求体格式错误")
 	}
 
-	// 兼容两种入参：provider 或 config
-	var baseURL, apiKey, model string
-	switch {
-	case req.Provider != nil && req.Provider.BaseURL != "":
-		baseURL, apiKey, model = req.Provider.BaseURL, req.Provider.APIKey, req.Provider.Model
-	case req.Config != nil && req.Config.BaseURL != "":
-		baseURL, apiKey, model = req.Config.BaseURL, req.Config.APIKey, req.Config.Model
-	default:
-		// 用租户配置里的生图配置
-		view, err := a.settings.GetView(c.Request().Context(), tenantID)
-		if err != nil {
-			return httpx.Internal(err)
+	// 租户库回退：请求里没带地址时再用已保存配置
+	var fallbackBase, fallbackKey, fallbackModel string
+	if a.settings != nil {
+		view, viewErr := a.settings.GetView(c.Request().Context(), tenantID)
+		if viewErr == nil {
+			fallbackBase, fallbackModel = view.Image.BaseURL, view.Image.Model
+			fallbackKey = a.settings.ImageAPIKey(c.Request().Context(), tenantID)
 		}
-		baseURL, model = view.Image.BaseURL, view.Image.Model
-		// 生图 Key 不回传（安全约束），测试时若未显式传则用服务端存的
-		apiKey = a.settings.ImageAPIKey(c.Request().Context(), tenantID)
+	}
+
+	baseURL, apiKey, model, _ := pickImageTestCredentials(req, fallbackBase, fallbackKey, fallbackModel)
+
+	// 前端回传的是占位符或空串时，改用服务端存的真实 Key
+	if a.settings != nil && (apiKey == "" || apiKey == configuredAPIKeyPlaceholder) {
+		if stored := a.settings.ImageAPIKey(c.Request().Context(), tenantID); stored != "" {
+			apiKey = stored
+		} else if apiKey == configuredAPIKeyPlaceholder {
+			apiKey = ""
+		}
 	}
 
 	if baseURL == "" {

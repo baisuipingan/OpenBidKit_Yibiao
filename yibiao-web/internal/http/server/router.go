@@ -24,6 +24,7 @@ import (
 	"github.com/patrick/yibiao-web/internal/service/agent/bidanalysis"
 	"github.com/patrick/yibiao-web/internal/service/agent/consistency"
 	"github.com/patrick/yibiao-web/internal/service/agent/content"
+	"github.com/patrick/yibiao-web/internal/service/agent/globalfacts"
 	"github.com/patrick/yibiao-web/internal/service/agent/outline"
 	"github.com/patrick/yibiao-web/internal/service/agenttool"
 	agenttoolbuiltin "github.com/patrick/yibiao-web/internal/service/agenttool/tools"
@@ -194,40 +195,207 @@ func New(d Deps) *echo.Echo {
 	} else if n > 0 {
 		d.Logger.Info("已清理僵死任务", slog.Int64("count", n))
 	}
+	// taskH / contentH 在下方装配；完成回调通过闭包变量调用 MarkDone，
+	// 不依赖 /tasks/events SSE 是否有订阅者。
+	var taskH *handler.Task
+	var contentH *handler.Content
+
 	bidRunner := bidanalysis.NewRunner(agentSvc, artifactSvc, d.Logger)
 	// 分析产物入库后回写到 technical_plan_meta，
 	// 否则前端 loadState 拿不到分析结果。
 	bidRunner.SetOnAnalysisDone(func(ctx context.Context, tenantID, projectID, taskID string, succeeded bool) {
-		if _, err := tpSvc.SyncBidAnalysisFromArtifacts(ctx, tenantID, projectID, taskID, artifactSvc, d.Logger); err != nil {
+		n, err := tpSvc.SyncBidAnalysisFromArtifacts(ctx, tenantID, projectID, taskID, artifactSvc, d.Logger)
+		if err != nil {
 			d.Logger.Warn("分析结果回写失败", slog.String("task_id", taskID), slog.String("error", err.Error()))
+		}
+		status := "success"
+		if !succeeded || n == 0 {
+			status = "error"
+			msg := "招标文件解析失败：模型未返回有效结果（请检查文本模型 Base URL / API Key / 额度）"
+			if markErr := tpSvc.MarkBidAnalysisFailed(ctx, tenantID, projectID, taskID, msg); markErr != nil {
+				d.Logger.Warn("写入招标分析失败状态失败", slog.String("error", markErr.Error()))
+			}
+		}
+		if taskH != nil {
+			taskH.MarkDone(taskID, status)
+		}
+		// 推送最终任务事件，让仍连着 SSE 的页面立刻刷新；
+		// 未连上的页面靠 load-state 里的 bidAnalysisTask / bidAnalysisTasks。
+		if runtime, loadErr := tpSvc.LoadBidAnalysisRuntime(ctx, tenantID, projectID); loadErr == nil {
+			taskPayload, _ := runtime["bidAnalysisTask"].(map[string]any)
+			if taskPayload == nil {
+				taskPayload = map[string]any{"task_id": taskID, "type": "bid-analysis", "status": status}
+			} else {
+				taskPayload["status"] = status
+				taskPayload["task_id"] = taskID
+				taskPayload["type"] = "bid-analysis"
+			}
+			d.Bus.Publish("task", events.Scope{TenantID: tenantID, ProjectID: projectID}, map[string]any{
+				"task": taskPayload,
+				"technicalPlanPatch": map[string]any{
+					"bidAnalysisTask":     taskPayload,
+					"bidAnalysisTasks":    runtime["bidAnalysisTasks"],
+					"bidAnalysisProgress": runtime["bidAnalysisProgress"],
+					"projectOverview":     runtime["projectOverview"],
+					"techRequirements":    runtime["techRequirements"],
+				},
+			})
 		}
 	})
 	outlineRunner := outline.NewRunner(agentSvc, artifactSvc, d.Logger)
 	// 目录产物入库后写进节点表，否则前端目录页拿不到数据。
 	outlineRunner.SetOnOutlineDone(func(ctx context.Context, tenantID, projectID, taskID string, succeeded bool) {
-		if _, err := tpSvc.SyncOutlineFromArtifacts(ctx, tenantID, projectID, taskID, artifactSvc, d.Logger); err != nil {
+		n, err := tpSvc.SyncOutlineFromArtifacts(ctx, tenantID, projectID, taskID, artifactSvc, d.Logger)
+		if err != nil {
 			d.Logger.Warn("目录回写失败", slog.String("task_id", taskID), slog.String("error", err.Error()))
 		}
+		status := "success"
+		if !succeeded || err != nil || n == 0 {
+			status = "error"
+			msg := "目录生成失败：未得到有效目录"
+			if err != nil {
+				msg = "目录生成失败：" + err.Error()
+			}
+			if markErr := tpSvc.MarkOutlineFailed(ctx, tenantID, projectID, taskID, msg); markErr != nil {
+				d.Logger.Warn("写入目录失败状态失败", slog.String("error", markErr.Error()))
+			}
+		}
+		if taskH != nil {
+			taskH.MarkDone(taskID, status)
+		}
+		// 推送最终任务事件 + outlineData，让页面立刻离开「等待生成任务启动」
+		state, loadErr := tpSvc.LoadState(ctx, tenantID, projectID)
+		if loadErr != nil {
+			d.Logger.Warn("目录完成后读状态失败", slog.String("error", loadErr.Error()))
+			return
+		}
+		taskPayload := state.OutlineGenerationTask
+		if taskPayload == nil {
+			taskPayload = map[string]any{"task_id": taskID, "type": "outline-generation", "status": status, "progress": 100}
+		}
+		d.Bus.Publish("task", events.Scope{TenantID: tenantID, ProjectID: projectID}, map[string]any{
+			"task": taskPayload,
+			"technicalPlanPatch": map[string]any{
+				"outlineGenerationTask": taskPayload,
+				"outlineData":           state.OutlineData,
+			},
+		})
 	})
 	contentRunner := content.NewRunner(agentSvc, artifactSvc, d.Logger)
 	// 正文产物入库后写进节点表，否则前端看不到生成内容。
 	contentRunner.SetOnContentDone(func(ctx context.Context, tenantID, projectID, taskID string, succeeded bool) {
-		if _, err := tpSvc.SyncContentFromArtifacts(ctx, tenantID, projectID, taskID, artifactSvc, d.Logger); err != nil {
+		n, err := tpSvc.SyncContentFromArtifacts(ctx, tenantID, projectID, taskID, artifactSvc, d.Logger)
+		if err != nil {
 			d.Logger.Warn("正文回写失败", slog.String("task_id", taskID), slog.String("error", err.Error()))
 		}
+		status := "success"
+		if !succeeded || err != nil || n == 0 {
+			status = "error"
+			msg := "正文生成失败"
+			if err != nil {
+				msg = "正文生成失败：" + err.Error()
+			} else if !succeeded {
+				msg = "正文生成失败：Agent 未成功完成"
+			} else if n == 0 {
+				msg = "正文生成失败：未得到有效章节"
+			}
+			if n == 0 {
+				if markErr := tpSvc.PersistContentGenerationFailed(ctx, tenantID, projectID, taskID, msg); markErr != nil {
+					d.Logger.Warn("写入正文失败状态失败", slog.String("error", markErr.Error()))
+				}
+			}
+		}
+		if contentH != nil {
+			contentH.MarkDone(taskID, status)
+		}
+		if taskH != nil {
+			taskH.MarkDone(taskID, status)
+		}
+		state, loadErr := tpSvc.LoadState(ctx, tenantID, projectID)
+		if loadErr != nil {
+			return
+		}
+		taskPayload := state.ContentGenerationTask
+		if taskPayload == nil {
+			taskPayload = map[string]any{"task_id": taskID, "type": "content-generation", "status": status, "progress": 100}
+		}
+		d.Bus.Publish("task", events.Scope{TenantID: tenantID, ProjectID: projectID}, map[string]any{
+			"task": taskPayload,
+			"technicalPlanPatch": map[string]any{
+				"contentGenerationTask":     taskPayload,
+				"contentGenerationSections": state.ContentGenerationSections,
+				"contentGenerationRuntime":  state.ContentGenerationRuntime,
+				"outlineData":               state.OutlineData,
+			},
+		})
+	})
+	globalFactsRunner := globalfacts.NewRunner(agentSvc, artifactSvc, d.Logger)
+	globalFactsRunner.SetOnDone(func(ctx context.Context, tenantID, projectID, taskID string, succeeded bool) {
+		n, err := tpSvc.SyncGlobalFactsFromArtifacts(ctx, tenantID, projectID, taskID, artifactSvc, d.Logger)
+		if err != nil {
+			d.Logger.Warn("全局事实回写失败", slog.String("task_id", taskID), slog.String("error", err.Error()))
+		}
+		status := "success"
+		if !succeeded || err != nil || n == 0 {
+			status = "error"
+			msg := "全局事实生成失败：未得到有效结果"
+			if err != nil {
+				msg = "全局事实生成失败：" + err.Error()
+			}
+			if markErr := tpSvc.MarkGlobalFactsFailed(ctx, tenantID, projectID, taskID, msg); markErr != nil {
+				d.Logger.Warn("写入全局事实失败状态失败", slog.String("error", markErr.Error()))
+			}
+		}
+		if taskH != nil {
+			taskH.MarkDone(taskID, status)
+		}
+		state, loadErr := tpSvc.LoadState(ctx, tenantID, projectID)
+		if loadErr != nil {
+			d.Logger.Warn("全局事实完成后读状态失败", slog.String("error", loadErr.Error()))
+			return
+		}
+		taskPayload := state.GlobalFactsTask
+		if taskPayload == nil {
+			taskPayload = map[string]any{
+				"task_id": taskID, "type": globalfacts.TaskType, "status": status, "progress": 100,
+			}
+		}
+		d.Bus.Publish("task", events.Scope{TenantID: tenantID, ProjectID: projectID}, map[string]any{
+			"task": taskPayload,
+			"technicalPlanPatch": map[string]any{
+				"globalFactsTask": taskPayload,
+				"globalFacts":     state.GlobalFacts,
+			},
+		})
 	})
 	consistencyRunner := consistency.NewRunner(agentSvc, d.Logger)
 
 	// --- 装配 handler ---
 	authH := handler.NewAuth(authSvc, d.Config.Auth.DefaultTenantID, d.Pool)
+
+	// 演示旁路：解析默认管理员身份。失败则启动失败，避免半开半关。
+	var demoIdentity *auth.DemoIdentity
+	if d.Config.Auth.DemoAuthBypass {
+		id, err := auth.ResolveDemoIdentity(context.Background(), d.Pool)
+		if err != nil {
+			d.Logger.Error("DEMO_AUTH_BYPASS 已开启但无法解析默认用户", slog.String("error", err.Error()))
+			panic(err)
+		}
+		demoIdentity = id
+		d.Logger.Warn("DEMO_AUTH_BYPASS 已开启：未登录请求将使用默认管理员身份",
+			slog.String("email", id.Email),
+			slog.String("tenant_id", id.TenantID),
+			slog.String("user_id", id.UserID),
+		)
+	}
 	tpH := handler.NewTechnicalPlan(tpSvc, uploadSvc)
 	tpH.SetQueries(store.New(d.Pool))
 	uploadH := handler.NewUpload(uploadSvc, d.Config.HTTP.MaxUploadBytes)
 	eventH := handler.NewEvent(d.Bus)
 	healthH := handler.NewHealth(d.Pool, d.Bus, storageBackend, d.Version)
 	rootH := handler.NewRoot(d.Version)
-	publicH := handler.NewPublic(d.Pool)
-	agentH := handler.NewAgent(agentSvc, usageRec)
+	publicH := handler.NewPublic(d.Pool, demoIdentity != nil)
+	agentH := handler.NewAgent(agentSvc, usageRec, settingsSvc)
 	bidH := handler.NewBidAnalysis(bidRunner, usageRec)
 	assetH := handler.NewAsset(artifactSvc)
 
@@ -264,8 +432,8 @@ func New(d Deps) *echo.Echo {
 	// AI 连通性测试（设置页「测试」按钮）
 	aiH := handler.NewAI(settingsSvc)
 	outlineH := handler.NewOutline(outlineRunner, tpSvc)
-	taskH := handler.NewTask(tpSvc, outlineRunner, bidRunner, contentRunner, settingsSvc, artifactSvc)
-	contentH := handler.NewContent(contentRunner, tpSvc, settingsSvc)
+	taskH = handler.NewTask(tpSvc, outlineRunner, bidRunner, contentRunner, globalFactsRunner, settingsSvc, artifactSvc, d.Bus)
+	contentH = handler.NewContent(contentRunner, tpSvc, settingsSvc, artifactSvc, d.Bus)
 
 	consistencyH := handler.NewConsistency(consistencyRunner, tpSvc, settingsSvc)
 	projectH := handler.NewProject(store.New(d.Pool))
@@ -273,10 +441,8 @@ func New(d Deps) *echo.Echo {
 	taskRunH := handler.NewTaskRun(taskRunSvc)
 	taskRunH.SetPlanService(tpSvc)
 
-	var exportH *handler.Export
-	if exportSvc != nil {
-		exportH = handler.NewExport(exportSvc, tpSvc)
-	}
+	// 始终注册导出路由：无 OpenXmlHelper 时仍返回 EXPORT_FAILED，避免前端落到 HTTP 404 Not Found。
+	exportH := handler.NewExport(exportSvc, tpSvc)
 	configH := handler.NewConfig(settingsSvc)
 
 	// 工具回调：按 sessionId 反查上下文
@@ -310,7 +476,7 @@ func New(d Deps) *echo.Echo {
 
 	// --- 需要登录的路由 ---
 	api := e.Group("/api")
-	api.Use(middleware.Auth(authMgr))
+	api.Use(middleware.Auth(authMgr, demoIdentity))
 	api.Use(middleware.ProjectScope())
 
 	// 当前用户
@@ -351,11 +517,15 @@ func New(d Deps) *echo.Echo {
 	// 正文生成（第三个标书垂类 Agent 功能）
 	contentH.SetTools(declsToAny(toolReg.Declarations()))
 	contentH.SetTaskRunLister(taskRunSvc)
+	contentH.SetActiveTracker(taskH)
 
 	// 知识库素材匹配：让正文生成能引用素材库里的真实内容
 	matcher := knowledge.NewMatcher(store.New(d.Pool), d.Logger)
 	contentH.SetKnowledge(matcher, d.Config.Knowledge.Enabled)
 	contentH.Register(api)
+
+	// 启动时调和僵尸正文任务：meta 仍 running 但内存/sidecar 已无。
+	go reconcileStaleContentTasks(context.Background(), tpSvc, taskRunSvc, taskH, artifactSvc, d.Logger)
 
 	// 一致性检查
 	consistencyH.Register(api)
@@ -369,10 +539,8 @@ func New(d Deps) *echo.Echo {
 	// 桌面版专属接口的兼容实现（不能让前端拿 404）
 	compatH.Register(api)
 
-	// Word 导出
-	if exportH != nil {
-		exportH.Register(api)
-	}
+	// Word 导出（始终注册；无助手时 handler 返回 EXPORT_FAILED）
+	exportH.Register(api)
 
 	// 资产（个人资产库）
 	assetH.Register(api)
@@ -500,6 +668,88 @@ func buildStorageBackend(ctx context.Context, cfg config.StoreConfig, log *slog.
 
 	default:
 		return nil, fmt.Errorf("未知的存储后端: %q（可选 local / s3）", cfg.Backend)
+	}
+}
+
+// reconcileStaleContentTasks 处理进程重启后的僵尸正文 running 态。
+//
+// 规则：
+//   - task_runs 已 success / 节点已有正文 → 回写 success（不重跑模型）
+//   - 否则标 interrupted，允许用户重新点「生成正文」
+func reconcileStaleContentTasks(
+	ctx context.Context,
+	tpSvc *service.TechnicalPlanService,
+	taskRuns *taskrun.Service,
+	taskH *handler.Task,
+	artifacts *artifact.Service,
+	log *slog.Logger,
+) {
+	if tpSvc == nil {
+		return
+	}
+	rows, err := tpSvc.ListProjectsWithRunningContentTask(ctx)
+	if err != nil {
+		if log != nil {
+			log.Warn("扫描僵尸正文任务失败", slog.String("error", err.Error()))
+		}
+		return
+	}
+	for _, row := range rows {
+		if row.TaskID == "" {
+			continue
+		}
+		if taskH != nil && taskH.HasRunning(row.TaskID) {
+			continue
+		}
+		runStatus := ""
+		if taskRuns != nil {
+			if view, getErr := taskRuns.Get(ctx, row.TaskID); getErr == nil && view != nil {
+				runStatus = view.Status
+			}
+		}
+		if runStatus == taskrun.StatusSuccess || runStatus == "completed" {
+			n, syncErr := tpSvc.SyncContentFromArtifacts(ctx, row.TenantID, row.ProjectID, row.TaskID, artifacts, log)
+			if syncErr != nil || n == 0 {
+				sections, written, buildErr := tpSvc.BuildContentSectionsFromNodes(ctx, row.TenantID, row.ProjectID)
+				if buildErr == nil && written > 0 {
+					_ = tpSvc.PersistContentGenerationSuccess(ctx, row.TenantID, row.ProjectID, row.TaskID, sections, written)
+					if log != nil {
+						log.Info("僵尸正文任务已按节点正文标为成功",
+							slog.String("task_id", row.TaskID),
+							slog.Int("written", written),
+						)
+					}
+					continue
+				}
+			} else if log != nil {
+				log.Info("僵尸正文任务已同步为成功",
+					slog.String("task_id", row.TaskID),
+					slog.Int("written", n),
+				)
+				continue
+			}
+		}
+		// 节点里其实已有正文时，优先标成功而不是 interrupted。
+		if sections, written, buildErr := tpSvc.BuildContentSectionsFromNodes(ctx, row.TenantID, row.ProjectID); buildErr == nil && written > 0 {
+			_ = tpSvc.PersistContentGenerationSuccess(ctx, row.TenantID, row.ProjectID, row.TaskID, sections, written)
+			if log != nil {
+				log.Info("僵尸正文任务已按节点正文标为成功",
+					slog.String("task_id", row.TaskID),
+					slog.Int("written", written),
+				)
+			}
+			continue
+		}
+		msg := "正文生成已中断（进程重启或任务丢失），可重新生成"
+		if markErr := tpSvc.PersistContentGenerationInterrupted(ctx, row.TenantID, row.ProjectID, row.TaskID, msg); markErr != nil {
+			if log != nil {
+				log.Warn("标记正文中断失败", slog.String("task_id", row.TaskID), slog.String("error", markErr.Error()))
+			}
+			continue
+		}
+		if log != nil {
+			log.Info("僵尸正文任务已标为 interrupted", slog.String("task_id", row.TaskID))
+		}
 	}
 }
 

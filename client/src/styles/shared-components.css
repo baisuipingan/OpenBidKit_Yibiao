@@ -196,10 +196,13 @@
 }
 
 .settings-page > .floating-toolbar {
+  /* 设置页把工具条锚定在侧栏右侧的内容区；必须清掉基类的
+     left:50% + translateX(-50%)，否则会整体左移半个宽度压住侧栏。 */
   position: fixed;
   right: 42px;
   bottom: 28px;
   left: calc(286px + 42px);
+  transform: none;
   z-index: 30;
 }
 

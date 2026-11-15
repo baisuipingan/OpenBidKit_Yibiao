@@ -233,7 +233,7 @@ type SaveImageRequest struct {
 	APIKey   string `json:"image_api_key"`
 }
 
-// SaveImage 保存生图配置。
+// SaveImage 保存生图配置（部分更新：空字段保留原值）。
 func (s *Service) SaveImage(ctx context.Context, tenantID string, req SaveImageRequest) error {
 	tid, err := uuid.Parse(tenantID)
 	if err != nil {
@@ -244,11 +244,29 @@ func (s *Service) SaveImage(ctx context.Context, tenantID string, req SaveImageR
 		return fmt.Errorf("初始化配置失败: %w", err)
 	}
 
+	current, err := s.q.GetTenantSettings(ctx, tid)
+	if err != nil {
+		return fmt.Errorf("读取当前配置失败: %w", err)
+	}
+
+	provider := req.Provider
+	if provider == "" {
+		provider = current.ImageProvider
+	}
+	baseURL := req.BaseURL
+	if baseURL == "" {
+		baseURL = current.ImageBaseUrl
+	}
+	model := req.Model
+	if model == "" {
+		model = current.ImageModel
+	}
+
 	if err := s.q.UpdateImageProvider(ctx, store.UpdateImageProviderParams{
 		TenantID:      tid,
-		ImageProvider: req.Provider,
-		ImageBaseUrl:  req.BaseURL,
-		ImageModel:    req.Model,
+		ImageProvider: provider,
+		ImageBaseUrl:  baseURL,
+		ImageModel:    model,
 	}); err != nil {
 		return fmt.Errorf("保存生图配置失败: %w", err)
 	}
@@ -261,6 +279,62 @@ func (s *Service) SaveImage(ctx context.Context, tenantID string, req SaveImageR
 		if err := s.q.UpsertTenantSecrets(ctx, store.UpsertTenantSecretsParams{
 			TenantID:    tid,
 			ImageApiKey: enc,
+		}); err != nil {
+			return fmt.Errorf("保存密钥失败: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// SaveParserRequest 是保存文件解析配置的请求。
+type SaveParserRequest struct {
+	TenderParser  string
+	MineruBaseURL string
+	MineruAPIKey  string
+}
+
+// SaveParser 保存招标文件解析配置（部分更新）。
+func (s *Service) SaveParser(ctx context.Context, tenantID string, req SaveParserRequest) error {
+	tid, err := uuid.Parse(tenantID)
+	if err != nil {
+		return fmt.Errorf("租户标识非法")
+	}
+
+	if _, err := s.q.EnsureTenantSettings(ctx, tid); err != nil {
+		return fmt.Errorf("初始化配置失败: %w", err)
+	}
+
+	current, err := s.q.GetTenantSettings(ctx, tid)
+	if err != nil {
+		return fmt.Errorf("读取当前配置失败: %w", err)
+	}
+
+	parser := req.TenderParser
+	if parser == "" {
+		parser = current.TenderParser
+	}
+	mineruURL := req.MineruBaseURL
+	if mineruURL == "" {
+		mineruURL = current.MineruBaseUrl
+	}
+
+	if err := s.q.UpdateTenderParser(ctx, store.UpdateTenderParserParams{
+		TenantID:      tid,
+		TenderParser:  parser,
+		MineruBaseUrl: mineruURL,
+	}); err != nil {
+		return fmt.Errorf("保存文件解析配置失败: %w", err)
+	}
+
+	if req.MineruAPIKey != "" {
+		enc, err := s.cipher.Encrypt(req.MineruAPIKey)
+		if err != nil {
+			return fmt.Errorf("加密密钥失败: %w", err)
+		}
+		if err := s.q.UpsertTenantSecrets(ctx, store.UpsertTenantSecretsParams{
+			TenantID:    tid,
+			MineruApiKey: enc,
 		}); err != nil {
 			return fmt.Errorf("保存密钥失败: %w", err)
 		}
