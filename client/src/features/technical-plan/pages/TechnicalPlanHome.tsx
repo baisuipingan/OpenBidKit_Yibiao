@@ -512,14 +512,21 @@ function TechnicalPlanHome({ registerLeaveGuard }: TechnicalPlanHomeProps) {
         const continueAnyway = await confirmOutlineWordControlLeave();
         if (!continueAnyway) return;
       }
-      const inspection = await window.yibiao!.technicalPlan.inspectBidTemplate();
-      if (inspection.added.length || inspection.changed.length) {
-        const choice = await confirmBidTemplateMismatch(inspection);
-        if (choice === 'cancel') return;
-        if (choice === 'extract') {
-          await startBidTemplateExtraction();
-          return;
+      // 投标模版核对失败不得把用户卡在目录页：字数警告已确认「仍然继续」后必须能前进。
+      try {
+        const inspection = await window.yibiao!.technicalPlan.inspectBidTemplate();
+        const added = Array.isArray(inspection?.added) ? inspection.added : [];
+        const changed = Array.isArray(inspection?.changed) ? inspection.changed : [];
+        if (added.length || changed.length) {
+          const choice = await confirmBidTemplateMismatch({ added, changed });
+          if (choice === 'cancel') return;
+          if (choice === 'extract') {
+            await startBidTemplateExtraction();
+            return;
+          }
         }
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : '核对投标模版失败，已跳过并继续', 'info');
       }
       targetStep = shouldSkipGlobalFacts(finalOutlineData) ? 'content-edit' : 'global-facts';
     }

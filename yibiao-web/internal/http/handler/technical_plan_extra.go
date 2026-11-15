@@ -7,6 +7,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/patrick/yibiao-web/internal/http/httpx"
+	"github.com/patrick/yibiao-web/internal/service"
 	"github.com/patrick/yibiao-web/internal/service/agent/outline"
 	"github.com/patrick/yibiao-web/internal/store"
 )
@@ -436,7 +437,11 @@ func (h *TechnicalPlan) CheckBidSections(c echo.Context) error {
 	})
 }
 
-// InspectBidTemplate 检查是否存在商务标模板。
+// InspectBidTemplate 对应桌面版 technicalPlan.inspectBidTemplate。
+//
+// 必须返回 BidTemplateInspection：{ added: [], changed: [] }。
+// 旧实现返回 { exists, chapterIds }，前端读 inspection.added.length 会抛错，
+// 字数警告点「仍然继续」后 stuck 在目录页。
 func (h *TechnicalPlan) InspectBidTemplate(c echo.Context) error {
 	tenantID, err := tenantUUID(c)
 	if err != nil {
@@ -453,10 +458,7 @@ func (h *TechnicalPlan) InspectBidTemplate(c echo.Context) error {
 		return httpx.Internal(loadErr)
 	}
 
-	return httpx.OK(c, map[string]any{
-		"exists":     state.BidTemplateExists,
-		"chapterIds": state.BidTemplateChapterIDs,
-	})
+	return httpx.OK(c, service.InspectBidTemplate(state))
 }
 
 // OpenBidTemplate 打开商务标模板。
