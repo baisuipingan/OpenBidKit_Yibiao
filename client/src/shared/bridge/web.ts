@@ -22,6 +22,24 @@ export function getAccessToken(): string {
   return localStorage.getItem(TOKEN_KEY) || '';
 }
 
+/**
+ * 演示旁路开关（由 AuthGate 根据 /public/bootstrap.demoAuthBypass 写入）。
+ *
+ * 打开后：
+ *   - 允许无 access token 发起业务请求（服务端会注入默认管理员）
+ *   - 401 不再强制跳登录页
+ * 关闭后行为与正式登录一致。登录/租户代码仍保留。
+ */
+let demoAuthBypass = false;
+
+export function setDemoAuthBypass(enabled: boolean) {
+  demoAuthBypass = enabled;
+}
+
+export function isDemoAuthBypass(): boolean {
+  return demoAuthBypass;
+}
+
 export function setTokens(access: string, refresh: string) {
   localStorage.setItem(TOKEN_KEY, access);
   localStorage.setItem(REFRESH_KEY, refresh);
@@ -86,16 +104,18 @@ async function ensureProject(): Promise<string> {
 
   const attempt = (async () => {
     const token = getAccessToken();
-    // 没有 token 时不发请求（登录前会 401，白白浪费）
-    if (!token) return '';
+    // 没有 token 且非演示旁路时不发请求（登录前会 401，白白浪费）
+    if (!token && !demoAuthBypass) return '';
 
     try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) headers.Authorization = `Bearer ${token}`;
+
       const res = await fetch(`${API_BASE}/projects/current`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
+        headers,
         body: '{}',
       });
       if (!res.ok) {
@@ -142,16 +162,18 @@ async function ensureProject(): Promise<string> {
 export async function ensureProjectValid(): Promise<string> {
   const existing = getProjectId();
   const token = getAccessToken();
-  if (!existing || !token) return ensureProject();
+  if (!existing || (!token && !demoAuthBypass)) return ensureProject();
 
   try {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'X-Project-Id': existing,
+    };
+    if (token) headers.Authorization = `Bearer ${token}`;
+
     const res = await fetch(`${API_BASE}/projects/select`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-        'X-Project-Id': existing,
-      },
+      headers,
       body: JSON.stringify({ projectId: existing }),
     });
     if (res.ok) return existing;
@@ -259,8 +281,12 @@ async function request<T>(path: string, body?: unknown, opts?: { retry?: boolean
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 
-  // 401：尝试刷新一次，失败则跳登录
+  // 401：尝试刷新一次，失败则跳登录（演示旁路除外）
   if (res.status === 401 && opts?.retry !== false) {
+    if (demoAuthBypass) {
+      throw new BridgeError('UNAUTHORIZED', '演示旁路下请求仍返回 401，请检查服务端 DEMO_AUTH_BYPASS');
+    }
+
     const refreshed = await tryRefresh();
     if (refreshed) return request<T>(path, body, { retry: false });
 

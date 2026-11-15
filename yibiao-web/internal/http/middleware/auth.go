@@ -23,30 +23,41 @@ const (
 //
 // 关键：tenant_id 只从令牌里取，绝不从请求头/请求体取。
 // 这是租户隔离的第一道闸——即使前端传了别的 tenant_id 也不认。
-func Auth(mgr *auth.Manager) echo.MiddlewareFunc {
+//
+// demo 非空时开启演示旁路：无令牌或令牌无效时，注入默认单用户身份，
+// 不删除登录/租户逻辑，关掉 DEMO_AUTH_BYPASS 即恢复强制登录。
+func Auth(mgr *auth.Manager, demo *auth.DemoIdentity) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			raw := bearerToken(c)
 			if raw == "" {
+				if demo != nil {
+					return applyIdentity(c, next, demo.UserID, demo.TenantID, demo.Role)
+				}
 				return httpx.Unauthorized("缺少访问令牌")
 			}
 
 			claims, err := mgr.ParseAccessToken(raw)
 			if err != nil {
+				if demo != nil {
+					return applyIdentity(c, next, demo.UserID, demo.TenantID, demo.Role)
+				}
 				return err
 			}
 
-			c.Set(CtxUserID, claims.UserID)
-			c.Set(CtxTenantID, claims.TenantID)
-			c.Set(CtxRole, claims.Role)
-
-			// 同步到 request context，供下游 service 用 context 取值
-			ctx := auth.WithIdentity(c.Request().Context(), claims.UserID, claims.TenantID, claims.Role)
-			c.SetRequest(c.Request().WithContext(ctx))
-
-			return next(c)
+			return applyIdentity(c, next, claims.UserID, claims.TenantID, claims.Role)
 		}
 	}
+}
+
+func applyIdentity(c echo.Context, next echo.HandlerFunc, userID, tenantID, role string) error {
+	c.Set(CtxUserID, userID)
+	c.Set(CtxTenantID, tenantID)
+	c.Set(CtxRole, role)
+
+	ctx := auth.WithIdentity(c.Request().Context(), userID, tenantID, role)
+	c.SetRequest(c.Request().WithContext(ctx))
+	return next(c)
 }
 
 // RequireRole 限制角色。必须在 Auth 之后使用。

@@ -220,13 +220,29 @@ func New(d Deps) *echo.Echo {
 
 	// --- 装配 handler ---
 	authH := handler.NewAuth(authSvc, d.Config.Auth.DefaultTenantID, d.Pool)
+
+	// 演示旁路：解析默认管理员身份。失败则启动失败，避免半开半关。
+	var demoIdentity *auth.DemoIdentity
+	if d.Config.Auth.DemoAuthBypass {
+		id, err := auth.ResolveDemoIdentity(context.Background(), d.Pool)
+		if err != nil {
+			d.Logger.Error("DEMO_AUTH_BYPASS 已开启但无法解析默认用户", slog.String("error", err.Error()))
+			panic(err)
+		}
+		demoIdentity = id
+		d.Logger.Warn("DEMO_AUTH_BYPASS 已开启：未登录请求将使用默认管理员身份",
+			slog.String("email", id.Email),
+			slog.String("tenant_id", id.TenantID),
+			slog.String("user_id", id.UserID),
+		)
+	}
 	tpH := handler.NewTechnicalPlan(tpSvc, uploadSvc)
 	tpH.SetQueries(store.New(d.Pool))
 	uploadH := handler.NewUpload(uploadSvc, d.Config.HTTP.MaxUploadBytes)
 	eventH := handler.NewEvent(d.Bus)
 	healthH := handler.NewHealth(d.Pool, d.Bus, storageBackend, d.Version)
 	rootH := handler.NewRoot(d.Version)
-	publicH := handler.NewPublic(d.Pool)
+	publicH := handler.NewPublic(d.Pool, demoIdentity != nil)
 	agentH := handler.NewAgent(agentSvc, usageRec)
 	bidH := handler.NewBidAnalysis(bidRunner, usageRec)
 	assetH := handler.NewAsset(artifactSvc)
@@ -310,7 +326,7 @@ func New(d Deps) *echo.Echo {
 
 	// --- 需要登录的路由 ---
 	api := e.Group("/api")
-	api.Use(middleware.Auth(authMgr))
+	api.Use(middleware.Auth(authMgr, demoIdentity))
 	api.Use(middleware.ProjectScope())
 
 	// 当前用户

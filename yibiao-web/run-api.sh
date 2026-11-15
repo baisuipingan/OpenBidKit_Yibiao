@@ -24,6 +24,8 @@ export DATABASE_URL="${DATABASE_URL:-postgres://yibiao:yibiao_dev_pwd@yibiao-dev
 export JWT_SECRET="${JWT_SECRET:-dev-only-secret-change-me-in-production-32chars}"
 # 加密存储 API Key 的主密钥（生产必须换成随机值）
 export SECRETS_KEY="${SECRETS_KEY:-dev-secrets-key-change-me-in-production-32chars}"
+# 演示旁路：跳过登录，未带令牌的请求映射到默认管理员。生产禁止开启。
+export DEMO_AUTH_BYPASS="${DEMO_AUTH_BYPASS:-0}"
 export STORAGE_ROOT="${STORAGE_ROOT:-/workspace/data}"
 # 对象存储：默认用 RustFS（S3 兼容）；本地调试可设 STORAGE_BACKEND=local
 export STORAGE_BACKEND="${STORAGE_BACKEND:-s3}"
